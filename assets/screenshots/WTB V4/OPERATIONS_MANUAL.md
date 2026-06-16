@@ -1,5 +1,5 @@
 
-# WTB v4.0.0 — Operations Manual
+# WTB v5.0.0 — Operations Manual
 
 **For server administrators and owners.**
 
@@ -510,4 +510,4 @@ Adjust the interval as needed. Always back up before running manual queries.
 
 ---
 
-*WTB v4.0.0 · Paper 1.21+ · Author: xJBACx*
+*WTB v5.0.0 · Paper 1.21+ · Author: xJBACx*
