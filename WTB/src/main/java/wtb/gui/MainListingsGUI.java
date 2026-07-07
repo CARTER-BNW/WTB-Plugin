@@ -22,6 +22,15 @@ public class MainListingsGUI {
     private static final int    GUI_SIZE = 54;
     private static final String TITLE    = "§2WTB Marketplace";
 
+    /**
+     * PDC key carrying each rendered listing's ID (audit fix #8).  Clicks are
+     * resolved by this ID — never by {@code slot + page*45} into a re-fetched
+     * list, which could target a DIFFERENT listing after the 1 s cache expired
+     * and the sorted order changed.
+     */
+    public static final org.bukkit.NamespacedKey LISTING_ID_KEY =
+            Objects.requireNonNull(org.bukkit.NamespacedKey.fromString("wtb:listing_id"));
+
     private static final int SLOT_MY_LISTINGS  = 45;
     private static final int SLOT_CLAIM_BOX    = 46;
     private static final int SLOT_FILTERS      = 47;
@@ -45,15 +54,23 @@ public class MainListingsGUI {
     public void openAsync(Player player, int page) {
         Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
             List<Listing> listings = getSortedListings();
+            // Audit fix #16: clamp to the last real page here, against the list
+            // actually being rendered.  The old pre-click hasPage() check read
+            // the raw cache field, which is empty right after clearCache() —
+            // wrongly refusing "Next Page".
+            int maxPage = Math.max(0, (listings.size() - 1) / 45);
+            int clamped = Math.max(0, Math.min(page, maxPage));
             Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
-                pageMap.put(player.getUniqueId(), page);
-                openWithListings(player, page, listings);
+                pageMap.put(player.getUniqueId(), clamped);
+                openWithListings(player, clamped, listings);
             });
         });
     }
 
     public void openWithListings(Player player, int page, List<Listing> listings) {
-        Inventory inv = Bukkit.createInventory(null, GUI_SIZE, TITLE);
+        WtbGuiHolder holder = new WtbGuiHolder(WtbGuiHolder.Type.MAIN);
+        Inventory inv = Bukkit.createInventory(holder, GUI_SIZE, TITLE);
+        holder.setInventory(inv);
 
         int start = page * 45;
         int end   = Math.min(start + 45, listings.size());
@@ -139,10 +156,6 @@ public class MainListingsGUI {
         return pageMap.getOrDefault(player.getUniqueId(), 0);
     }
 
-    public boolean hasPage(int page) {
-        return page * 45 < cachedListings.size();
-    }
-
     /** Remove page tracking for a player who has disconnected. */
     public void cleanupPlayer(UUID uuid) {
         pageMap.remove(uuid);
@@ -158,6 +171,15 @@ public class MainListingsGUI {
         if (unfulfillable) item = new ItemStack(Material.BARRIER);
 
         ItemMeta  meta = item.getItemMeta();
+        if (meta == null) {
+            // Meta-less template (e.g. AIR from a corrupt DB row) — render as
+            // unfulfillable instead of NPE-ing the whole marketplace render.
+            unfulfillable = true;
+            item = new ItemStack(Material.BARRIER);
+            meta = item.getItemMeta();
+        }
+        meta.getPersistentDataContainer().set(LISTING_ID_KEY,
+                org.bukkit.persistence.PersistentDataType.INTEGER, listing.getId());
 
         String buyerName    = NameCache.getName(listing.getBuyer());
         double pricePerUnit = listing.getOriginalPrice() / listing.getOriginalQuantity();

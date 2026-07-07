@@ -52,7 +52,9 @@ public class ClaimBoxGUI {
     // ── Render ────────────────────────────────────────────────────────────────
 
     private void render(Player player, int page, List<ClaimEntry> claims) {
-        Inventory inv = Bukkit.createInventory(null, GUI_SIZE, TITLE);
+        WtbGuiHolder holder = new WtbGuiHolder(WtbGuiHolder.Type.CLAIM_BOX);
+        Inventory inv = Bukkit.createInventory(holder, GUI_SIZE, TITLE);
+        holder.setInventory(inv);
 
         int start = Math.max(0, page * 45);
         int end   = Math.min(start + 45, claims.size());
@@ -128,8 +130,23 @@ public class ClaimBoxGUI {
                 }
                 ItemMeta meta = stored.getItemMeta();
                 if (meta == null) {
-                    // Extremely rare: ItemStack from DB has no meta — yield as-is, lore not added.
-                    yield stored;
+                    // Extremely rare: stack from DB has no meta.  Audit fix #15:
+                    // the old code yielded the bare stack WITHOUT the Entry ID
+                    // lore, so the click handler could never resolve it and the
+                    // entry became unclaimable.  Render a placeholder icon that
+                    // carries the ID — the claim itself grants the real stored
+                    // item from the DB entry, not this icon.
+                    ItemStack fallback = new ItemStack(Material.BARRIER);
+                    ItemMeta  fMeta    = fallback.getItemMeta();
+                    fMeta.setDisplayName("§fItem Reward: §e" + stored.getType().name());
+                    fMeta.setLore(List.of(
+                            "§7Item Reward",
+                            "§8Entry ID: " + entry.getId(),
+                            "",
+                            "§eClick to claim"
+                    ));
+                    fallback.setItemMeta(fMeta);
+                    yield fallback;
                 }
                 meta.setLore(List.of(
                         "§7Item Reward",

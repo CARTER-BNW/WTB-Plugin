@@ -22,15 +22,18 @@ public class SQLiteDatabase implements DatabaseProvider {
         }
 
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
+        // WAL mode: concurrent reads don't block writes.
+        // busy_timeout retries instead of immediately throwing SQLITE_BUSY.
+        // Audit fix #9: these MUST be URL parameters (parsed per-connection by
+        // the Xerial driver), NOT a multi-statement connectionInitSql — the
+        // driver executes only the FIRST statement of a semicolon-joined
+        // string, so busy_timeout and synchronous were silently never applied.
+        config.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath()
+                + "?journal_mode=WAL&busy_timeout=5000&synchronous=NORMAL");
         config.setMaximumPoolSize(4);
         config.setMinimumIdle(1);
         config.setConnectionTimeout(10_000);
         config.setIdleTimeout(60_000);
-        // WAL mode: concurrent reads don't block writes.
-        // busy_timeout retries instead of immediately throwing SQLITE_BUSY.
-        config.setConnectionInitSql(
-                "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;");
         config.setPoolName("WTB-SQLite");
 
         dataSource = new HikariDataSource(config);
@@ -169,18 +172,29 @@ public class SQLiteDatabase implements DatabaseProvider {
             log.info("[WTB] Migration: added listings.custom_name (V6).");
         }
         if (ensureColumn(conn, "listings", "paid_cents", "INTEGER NOT NULL DEFAULT 0")) {
-            // Backfill: approximate cents already paid on pre-V6 rows.
-            // CAST(... AS INTEGER) truncates toward zero == floor for positives.
-            try (var stmt = conn.createStatement()) {
-                int rows = stmt.executeUpdate("""
-                    UPDATE listings
-                    SET paid_cents = CAST(original_price * 100.0
-                            * (original_quantity - remaining_quantity)
-                            / original_quantity AS INTEGER)
-                    WHERE original_quantity > 0
-                """);
-                log.info("[WTB] Migration: added listings.paid_cents and backfilled "
-                        + rows + " row(s) (V6).");
+            log.info("[WTB] Migration: added listings.paid_cents (V6).");
+        }
+        // Backfill: approximate cents already paid on pre-V6 rows.
+        // CAST(... AS INTEGER) truncates toward zero == floor for positives.
+        // Audit fix #4: runs EVERY boot against rows that still need it — the
+        // old add-column-then-backfill pair was not atomic, so a backfill
+        // failure on first V6 boot was never retried and pre-V6 partial
+        // listings over-refunded on cancel/expiry.  The WHERE clause keeps
+        // this idempotent (only active, partially-filled rows still at 0).
+        try (var stmt = conn.createStatement()) {
+            int rows = stmt.executeUpdate("""
+                UPDATE listings
+                SET paid_cents = CAST(original_price * 100.0
+                        * (original_quantity - remaining_quantity)
+                        / original_quantity AS INTEGER)
+                WHERE original_quantity > 0
+                  AND paid_cents = 0
+                  AND remaining_quantity < original_quantity
+                  AND state IN ('OPEN','PARTIAL')
+            """);
+            if (rows > 0) {
+                log.info("[WTB] Migration: backfilled paid_cents on " + rows
+                        + " pre-V6 partially-filled row(s).");
             }
         }
         if (ensureColumn(conn, "transactions", "enchant", "TEXT")) {

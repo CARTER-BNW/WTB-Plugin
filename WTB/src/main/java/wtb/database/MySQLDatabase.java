@@ -149,23 +149,29 @@ public class MySQLDatabase implements DatabaseProvider {
             """);
 
             // Performance indexes.
-            // Each is wrapped individually so a pre-existing index (server restart)
-            // does not abort the remaining creates.  MySQL < 8.0.1 does not support
-            // CREATE INDEX IF NOT EXISTS, so we catch the duplicate-key error instead.
-            for (String idx : new String[]{
-                    "CREATE INDEX IF NOT EXISTS idx_listings_buyer   ON listings(buyer)",
-                    "CREATE INDEX IF NOT EXISTS idx_listings_state   ON listings(state)",
-                    "CREATE INDEX IF NOT EXISTS idx_listings_expires ON listings(expires_at)",
-                    "CREATE INDEX IF NOT EXISTS idx_claimbox_player  ON claim_box(player)",
-                    "CREATE INDEX IF NOT EXISTS idx_tx_buyer         ON transactions(buyer)",
-                    "CREATE INDEX IF NOT EXISTS idx_tx_seller        ON transactions(seller)",
-                    "CREATE INDEX IF NOT EXISTS idx_tx_timestamp     ON transactions(timestamp)",
-                    "CREATE INDEX IF NOT EXISTS idx_notify_player    ON notifications(player)"
-            }) {
+            // Audit fix #5: NO version of MySQL supports CREATE INDEX IF NOT
+            // EXISTS (that is MariaDB syntax) — the old statements threw
+            // SQLSyntaxErrorException on every boot and the catch swallowed it,
+            // so no index was ever created.  Create without the clause and
+            // treat only "duplicate key name" (error 1061) as the no-op.
+            String[][] indexes = {
+                    {"idx_listings_buyer",   "CREATE INDEX idx_listings_buyer   ON listings(buyer)"},
+                    {"idx_listings_state",   "CREATE INDEX idx_listings_state   ON listings(state)"},
+                    {"idx_listings_expires", "CREATE INDEX idx_listings_expires ON listings(expires_at)"},
+                    {"idx_claimbox_player",  "CREATE INDEX idx_claimbox_player  ON claim_box(player)"},
+                    {"idx_tx_buyer",         "CREATE INDEX idx_tx_buyer         ON transactions(buyer)"},
+                    {"idx_tx_seller",        "CREATE INDEX idx_tx_seller        ON transactions(seller)"},
+                    {"idx_tx_timestamp",     "CREATE INDEX idx_tx_timestamp     ON transactions(timestamp)"},
+                    {"idx_notify_player",    "CREATE INDEX idx_notify_player    ON notifications(player)"}
+            };
+            for (String[] idx : indexes) {
                 try {
-                    stmt.execute(idx);
-                } catch (SQLException ignored) {
-                    // Index already exists (MySQL < 8.0.1 raises error instead of no-op)
+                    stmt.execute(idx[1]);
+                } catch (SQLException e) {
+                    if (e.getErrorCode() != 1061) { // 1061 = ER_DUP_KEYNAME (already exists)
+                        Main.getInstance().getLogger().warning(
+                                "[WTB] Could not create index " + idx[0] + ": " + e.getMessage());
+                    }
                 }
             }
         }
@@ -195,16 +201,31 @@ public class MySQLDatabase implements DatabaseProvider {
             log.info("[WTB] Migration: added listings.custom_name (V6).");
         }
         if (ensureColumn(conn, "listings", "paid_cents", "BIGINT NOT NULL DEFAULT 0")) {
-            try (var stmt = conn.createStatement()) {
-                int rows = stmt.executeUpdate("""
-                    UPDATE listings
-                    SET paid_cents = FLOOR(original_price * 100.0
-                            * (original_quantity - remaining_quantity)
-                            / original_quantity)
-                    WHERE original_quantity > 0
-                """);
-                log.info("[WTB] Migration: added listings.paid_cents and backfilled "
-                        + rows + " row(s) (V6).");
+            log.info("[WTB] Migration: added listings.paid_cents (V6).");
+        }
+        // Audit fix #4: the backfill runs EVERY boot against rows that still
+        // need it, not only in the same breath as the column-add.  The old
+        // shape (add column, then backfill as a second statement) was not
+        // atomic: DDL auto-commits, so a backfill failure on first V6 boot
+        // left the column present and the backfill skipped forever — a
+        // pre-V6 partially-filled listing with paid_cents=0 then refunded the
+        // FULL price on cancel/expiry even though items had been delivered.
+        // The WHERE clause makes this idempotent: it only touches active,
+        // partially-filled rows that still carry the pre-V6 default of 0.
+        try (var stmt = conn.createStatement()) {
+            int rows = stmt.executeUpdate("""
+                UPDATE listings
+                SET paid_cents = FLOOR(original_price * 100.0
+                        * (original_quantity - remaining_quantity)
+                        / original_quantity)
+                WHERE original_quantity > 0
+                  AND paid_cents = 0
+                  AND remaining_quantity < original_quantity
+                  AND state IN ('OPEN','PARTIAL')
+            """);
+            if (rows > 0) {
+                log.info("[WTB] Migration: backfilled paid_cents on " + rows
+                        + " pre-V6 partially-filled row(s).");
             }
         }
         if (ensureColumn(conn, "transactions", "enchant", "VARCHAR(96) NULL")) {
@@ -215,11 +236,27 @@ public class MySQLDatabase implements DatabaseProvider {
         }
 
         // Widen the price_history key column for enchanted-book aggregation keys.
-        // MODIFY on a VARCHAR PK to a longer VARCHAR is metadata-only and safe.
-        try (var stmt = conn.createStatement()) {
-            stmt.execute("ALTER TABLE price_history MODIFY material VARCHAR(128) NOT NULL");
+        // Audit fix #17: only run the MODIFY when the column is actually
+        // narrower than 128 — an unconditional MODIFY can trigger a table
+        // rebuild on every boot.
+        boolean needsWiden = false;
+        try (PreparedStatement stmt = conn.prepareStatement("""
+                SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'price_history' AND column_name = 'material'
+                """);
+             ResultSet rs = stmt.executeQuery()) {
+            needsWiden = rs.next() && rs.getLong(1) < 128;
         } catch (SQLException ignored) {
-            // Already widened, or insufficient privileges — non-fatal either way.
+            // information_schema unreadable — skip rather than rebuild blindly.
+        }
+        if (needsWiden) {
+            try (var stmt = conn.createStatement()) {
+                stmt.execute("ALTER TABLE price_history MODIFY material VARCHAR(128) NOT NULL");
+                log.info("[WTB] Migration: widened price_history.material to VARCHAR(128).");
+            } catch (SQLException ignored) {
+                // Insufficient privileges — non-fatal.
+            }
         }
     }
 

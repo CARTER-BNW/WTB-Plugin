@@ -68,13 +68,21 @@ public record EnchantSpec(String key, int level) {
         return new EnchantSpec(ench.getKey().toString(), level);
     }
 
-    /** Resolves an enchantment name (with or without namespace) to the registry entry. */
+    /**
+     * Resolves an enchantment name (with or without namespace) to the registry entry.
+     *
+     * <p>Audit fix #7: both branches must go through {@link NamespacedKey#fromString},
+     * which returns null on invalid characters.  {@code NamespacedKey.minecraft(...)}
+     * THROWS IllegalArgumentException instead, so any player typing
+     * {@code /wtb enchanted_book 1 100 foo!bar} crashed the command with an
+     * uncaught exception.
+     */
     public static Enchantment resolveByName(String name) {
         if (name == null || name.isBlank()) return null;
         String lower = name.toLowerCase(Locale.ROOT);
         NamespacedKey key = lower.contains(":")
                 ? NamespacedKey.fromString(lower)
-                : NamespacedKey.minecraft(lower);
+                : NamespacedKey.fromString("minecraft:" + lower);
         if (key == null) return null;
         return Registry.ENCHANTMENT.get(key);
     }

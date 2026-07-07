@@ -53,12 +53,23 @@ public final class Payout {
      * listing priced at {@code priceCents} total.  Floor division — dust is
      * settled by {@link #remainder} on the final fill.
      *
-     * <p>Overflow-safe for priceCents ≤ 10^14 and amount ≤ 10^5
-     * (both enforced at listing creation).
+     * <p>Audit fix #13: the old claim of being "overflow-safe for
+     * priceCents ≤ 10^14 and amount ≤ 10^5" was false — that product is 10^19,
+     * past {@code Long.MAX_VALUE} (~9.2×10^18).  Today's callers clamp
+     * {@code amount} to physical inventory (≤ ~2,304), so no live overflow
+     * existed, but the math is now exact for ANY caller: on 64-bit overflow it
+     * falls back to BigInteger instead of silently minting a garbage payout.
      */
     public static long portionCents(long priceCents, int totalQty, int amount) {
         if (totalQty <= 0 || amount <= 0) return 0;
-        return (priceCents * amount) / totalQty;
+        try {
+            return Math.multiplyExact(priceCents, amount) / totalQty;
+        } catch (ArithmeticException overflow) {
+            return java.math.BigInteger.valueOf(priceCents)
+                    .multiply(java.math.BigInteger.valueOf(amount))
+                    .divide(java.math.BigInteger.valueOf(totalQty))
+                    .longValueExact();
+        }
     }
 
     /** Whatever is still unpaid from escrow: {@code priceCents - paidCents}, never negative. */

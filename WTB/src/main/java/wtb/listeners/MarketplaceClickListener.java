@@ -26,14 +26,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class MarketplaceClickListener implements Listener {
 
-    // GUI title constants — must exactly match the plain-text title each GUI class sets.
-    // matchesTitle() strips §-colour codes before comparing so colour-prefixed titles
-    // still match, and any renamed container whose stripped title differs does NOT match.
-    private static final String GUI_MAIN         = "WTB Marketplace";
-    private static final String GUI_MY_LISTINGS  = "My Buy Orders";
-    private static final String GUI_CLAIM_BOX    = "Claim Box";
-    private static final String GUI_TRANSACTIONS = "Recent Transactions";
-    private static final String GUI_CONFIRM      = ConfirmSaleGUI.TITLE_PLAIN;
+    // Audit fix #6: GUIs are identified by their WtbGuiHolder (unforgeable
+    // inventory identity), never by title string — a foreign inventory that
+    // happens to share a title can no longer trigger WTB handlers.
 
     // C1/C2: per-entry and per-player claim locks — prevent double-claim on rapid clicks
     private static final Set<Integer> CLAIMING     = Collections.newSetFromMap(new ConcurrentHashMap<>());
@@ -82,8 +77,7 @@ public class MarketplaceClickListener implements Listener {
         if (!(e.getWhoClicked() instanceof Player player)) return;
         if (e.getClickedInventory() == null) return;
 
-        String title = e.getView().getTitle();
-        if (!isWtbGui(title)) return;
+        if (!(e.getView().getTopInventory().getHolder() instanceof WtbGuiHolder holder)) return;
 
         e.setCancelled(true);
 
@@ -95,11 +89,13 @@ public class MarketplaceClickListener implements Listener {
         // but must not trigger buttons that happen to share the slot number.
         if (e.getClickedInventory() != e.getView().getTopInventory()) return;
 
-        if      (matchesTitle(title, GUI_MAIN))         handleMainGUI(player, clicked, e.getSlot());
-        else if (matchesTitle(title, GUI_MY_LISTINGS))  handleMyListingsGUI(player, clicked, e.getSlot());
-        else if (matchesTitle(title, GUI_CLAIM_BOX))    handleClaimBoxGUI(player, clicked, e.getSlot());
-        else if (matchesTitle(title, GUI_TRANSACTIONS)) handleTransactionsGUI(player, clicked, e.getSlot());
-        else if (matchesTitle(title, GUI_CONFIRM))      Main.getConfirmSaleGUI().handleClick(player, e.getSlot());
+        switch (holder.getType()) {
+            case MAIN         -> handleMainGUI(player, clicked, e.getSlot());
+            case MY_LISTINGS  -> handleMyListingsGUI(player, clicked, e.getSlot());
+            case CLAIM_BOX    -> handleClaimBoxGUI(player, clicked, e.getSlot());
+            case TRANSACTIONS -> handleTransactionsGUI(player, clicked, e.getSlot());
+            case CONFIRM      -> Main.getConfirmSaleGUI().handleClick(player, e.getSlot());
+        }
     }
 
     /**
@@ -110,7 +106,7 @@ public class MarketplaceClickListener implements Listener {
     @EventHandler
     public void onDrag(InventoryDragEvent e) {
         if (!(e.getWhoClicked() instanceof Player)) return;
-        if (isWtbGui(e.getView().getTitle())) {
+        if (e.getView().getTopInventory().getHolder() instanceof WtbGuiHolder) {
             e.setCancelled(true);
         }
     }
@@ -119,25 +115,10 @@ public class MarketplaceClickListener implements Listener {
     @EventHandler
     public void onClose(InventoryCloseEvent e) {
         if (!(e.getPlayer() instanceof Player player)) return;
-        if (matchesTitle(e.getView().getTitle(), GUI_CONFIRM)) {
+        if (e.getView().getTopInventory().getHolder() instanceof WtbGuiHolder holder
+                && holder.getType() == WtbGuiHolder.Type.CONFIRM) {
             Main.getConfirmSaleGUI().handleClose(player.getUniqueId());
         }
-    }
-
-    private static boolean isWtbGui(String title) {
-        return matchesTitle(title, GUI_MAIN)
-                || matchesTitle(title, GUI_MY_LISTINGS)
-                || matchesTitle(title, GUI_CLAIM_BOX)
-                || matchesTitle(title, GUI_TRANSACTIONS)
-                || matchesTitle(title, GUI_CONFIRM);
-    }
-
-    /**
-     * Strips all §-colour/format codes from {@code rawTitle} and compares the
-     * result to {@code expected} for exact equality.
-     */
-    private static boolean matchesTitle(String rawTitle, String expected) {
-        return rawTitle.replaceAll("§.", "").equals(expected);
     }
 
     // ── Main marketplace GUI ──────────────────────────────────────────────────
@@ -167,12 +148,8 @@ public class MarketplaceClickListener implements Listener {
             case 49 -> Bukkit.getScheduler().runTask(Main.getInstance(), // Refresh
                     () -> mainGUI.openAsync(player, 0));
 
-            case 50 -> { // Next page
+            case 50 -> { // Next page — openAsync clamps to the last real page
                 int next = mainGUI.getPage(player) + 1;
-                if (!mainGUI.hasPage(next)) {
-                    player.sendMessage(Main.msg("no_more_pages"));
-                    return;
-                }
                 Bukkit.getScheduler().runTask(Main.getInstance(),
                         () -> mainGUI.openAsync(player, next));
             }
@@ -198,44 +175,52 @@ public class MarketplaceClickListener implements Listener {
                 if (slot >= 45) return;
                 if (isOnFulfillCooldown(player)) return;
 
-                int page  = mainGUI.getPage(player);
-                int index = slot + (page * 45);
-                List<Listing> listings = mainGUI.getSortedListings();
-                if (index >= listings.size()) return;
-
-                Listing listing = listings.get(index);
-
-                if (listing.getState() == ListingState.FILLED
-                        || listing.getRemainingQuantity() <= 0) {
-                    player.sendMessage(Main.msg("already_filled"));
-                    Bukkit.getScheduler().runTask(Main.getInstance(),
-                            () -> { mainGUI.clearCache(); mainGUI.openAsync(player, page); });
-                    return;
-                }
+                // Audit fix #8: resolve the click by the listing ID stored on
+                // the rendered item (PDC) — never by slot index into a
+                // re-fetched, possibly re-sorted list, which could silently
+                // target a DIFFERENT order.  This also removes the main-thread
+                // DB query the old index path did on every cache miss (fix #10).
+                final int listingId = extractListingIdPdc(clicked);
+                if (listingId == -1) return;
 
                 // V6: route through the confirmation screen (re-fetches the
                 // listing FRESH from the DB) instead of trading on a bare click.
                 if (confirmEnabled()) {
-                    final int fId = listing.getId();
                     Bukkit.getScheduler().runTask(Main.getInstance(),
-                            () -> Main.getConfirmSaleGUI().openSingle(player, fId));
+                            () -> Main.getConfirmSaleGUI().openSingle(player, listingId));
                     return;
                 }
 
-                // Legacy direct path (confirm-enabled: false).
+                // Legacy direct path (confirm-enabled: false): re-fetch FRESH by
+                // ID off the main thread, validate, then fulfil on the main thread.
                 final int currentPage = mainGUI.getPage(player);
-                boolean scheduled = Main.getListingService().fulfillListing(
-                        player, listing, Integer.MAX_VALUE, () -> {
+                Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+                    final Listing fresh = new ListingDAO().getById(listingId);
+                    Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
+                        if (!player.isOnline()) return;
+
+                        if (fresh == null
+                                || (fresh.getState() != ListingState.OPEN
+                                        && fresh.getState() != ListingState.PARTIAL)
+                                || fresh.getRemainingQuantity() <= 0) {
+                            player.sendMessage(Main.msg("already_filled"));
                             mainGUI.clearCache();
                             mainGUI.openAsync(player, currentPage);
-                        });
+                            return;
+                        }
 
-                if (!scheduled) {
-                    Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
-                        mainGUI.clearCache();
-                        mainGUI.openAsync(player, currentPage);
+                        boolean scheduled = Main.getListingService().fulfillListing(
+                                player, fresh, Integer.MAX_VALUE, () -> {
+                                    mainGUI.clearCache();
+                                    mainGUI.openAsync(player, currentPage);
+                                });
+
+                        if (!scheduled) {
+                            mainGUI.clearCache();
+                            mainGUI.openAsync(player, currentPage);
+                        }
                     });
-                }
+                });
             }
         }
     }
@@ -283,7 +268,9 @@ public class MarketplaceClickListener implements Listener {
             int listingId = extractListingId(clicked);
             if (listingId == -1) return;
 
-            Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+            // DbExecutor (audit fix #2): this can WRITE (cancel + refund), so it
+            // must drain on shutdown rather than die with the Bukkit async queue.
+            wtb.database.DbExecutor.submit(() -> {
                 Listing target = null;
                 for (Listing l : new ListingDAO().getByBuyerVisible(player.getUniqueId())) {
                     if (l.getId() == listingId) { target = l; break; }
@@ -357,26 +344,14 @@ public class MarketplaceClickListener implements Listener {
                     return;
                 }
 
-                Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
-                    try {
-                        int succeeded = 0, failed = 0;
-                        for (ClaimEntry entry : entries) {
-                            if (Main.getClaimBoxService().claim(player, entry)) succeeded++;
-                            else failed++;
-                        }
-                        claimBoxGUI.open(player, 0);
-                        if (failed == 0) {
-                            player.sendMessage(Main.msg("claim_all_success")
-                                    .replace("{count}", String.valueOf(succeeded)));
-                        } else {
-                            player.sendMessage(Main.msg("claim_all_partial")
-                                    .replace("{count}",  String.valueOf(succeeded))
-                                    .replace("{failed}", String.valueOf(failed)));
-                        }
-                    } finally {
-                        CLAIMING_ALL.remove(player.getUniqueId());
-                    }
-                });
+                // Audit fix #10: the old code processed EVERY entry in a single
+                // tick — each claim() is one synchronous JDBC delete, so a big
+                // claim box froze the server for the whole loop.  Spread the
+                // work across ticks; each claim() stays atomic (delete-first +
+                // grant on the main thread), so correctness is unchanged.
+                Deque<ClaimEntry> queue = new ArrayDeque<>(entries);
+                Bukkit.getScheduler().runTask(Main.getInstance(),
+                        () -> processClaimBatch(player, claimBoxGUI, queue, new int[2]));
             });
             return;
         }
@@ -421,6 +396,49 @@ public class MarketplaceClickListener implements Listener {
         }
     }
 
+    /** Max claim entries processed per tick during Claim All (audit fix #10). */
+    private static final int CLAIMS_PER_TICK = 5;
+
+    /**
+     * Processes up to {@link #CLAIMS_PER_TICK} claims on the main thread, then
+     * re-schedules itself for the next tick until the queue is empty (or the
+     * player leaves).  counters[0] = succeeded, counters[1] = failed.
+     */
+    private void processClaimBatch(Player player, ClaimBoxGUI claimBoxGUI,
+                                   Deque<ClaimEntry> queue, int[] counters) {
+        try {
+            int done = 0;
+            while (!queue.isEmpty() && done < CLAIMS_PER_TICK) {
+                ClaimEntry entry = queue.poll();
+                if (Main.getClaimBoxService().claim(player, entry)) counters[0]++;
+                else counters[1]++;
+                done++;
+            }
+
+            if (!queue.isEmpty() && player.isOnline()) {
+                Bukkit.getScheduler().runTaskLater(Main.getInstance(),
+                        () -> processClaimBatch(player, claimBoxGUI, queue, counters), 1L);
+                return; // lock stays held until the chain finishes
+            }
+
+            if (player.isOnline()) {
+                claimBoxGUI.open(player, 0);
+                if (counters[1] == 0) {
+                    player.sendMessage(Main.msg("claim_all_success")
+                            .replace("{count}", String.valueOf(counters[0])));
+                } else {
+                    player.sendMessage(Main.msg("claim_all_partial")
+                            .replace("{count}",  String.valueOf(counters[0]))
+                            .replace("{failed}", String.valueOf(counters[1])));
+                }
+            }
+            CLAIMING_ALL.remove(player.getUniqueId());
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            CLAIMING_ALL.remove(player.getUniqueId());
+        }
+    }
+
     // ── Transactions GUI ──────────────────────────────────────────────────────
 
     private void handleTransactionsGUI(Player player, ItemStack clicked, int slot) {
@@ -452,12 +470,25 @@ public class MarketplaceClickListener implements Listener {
     // ── Fill All (legacy direct path — used only when confirm-enabled: false) ─
 
     private void fillAllOpenListings(Player player) {
+        // Audit fix #10: clearCache() guarantees the next getSortedListings()
+        // hits the database, so the fetch MUST happen off the main thread —
+        // the old code ran it directly in the click handler.
+        Main.getMainGUI().clearCache();
+        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+            List<Listing> listings = Main.getMainGUI().getSortedListings();
+            Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
+                if (!player.isOnline()) return;
+                fillAllFromListings(player, listings);
+            });
+        });
+    }
+
+    /** Main-thread continuation of Fill All once the listing snapshot is fetched. */
+    private void fillAllFromListings(Player player, List<Listing> listings) {
         // ListingService.fulfillListing performs an atomic RELATIVE claim in the
         // DB, so even if the cached list is stale, a listing that was already
         // fulfilled (or lacks the requested remaining) simply aborts and the
         // seller's items are returned via claim box — no phantom rewards.
-        Main.getMainGUI().clearCache();
-        List<Listing> listings = Main.getMainGUI().getSortedListings();
 
         // Start at 1 so the counter cannot reach 0 until the loop finishes adding all tasks.
         // The final decrementAndGet() below acts as the "loop-done" signal.
@@ -511,6 +542,19 @@ public class MarketplaceClickListener implements Listener {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Reads the listing ID a marketplace icon carries in its
+     * PersistentDataContainer (set by MainListingsGUI.createListingItem).
+     * Returns -1 for buttons/foreign items that carry no ID.
+     */
+    private int extractListingIdPdc(ItemStack item) {
+        if (!item.hasItemMeta()) return -1;
+        Integer id = item.getItemMeta().getPersistentDataContainer()
+                .get(MainListingsGUI.LISTING_ID_KEY,
+                        org.bukkit.persistence.PersistentDataType.INTEGER);
+        return id != null ? id : -1;
+    }
 
     private int extractListingId(ItemStack item) {
         if (!item.hasItemMeta()) return -1;

@@ -22,21 +22,23 @@ public class ListingService {
     private static final Set<Integer> PROCESSING =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
+    // JVM-level lock: one create pipeline per player at a time.  Closes the
+    // TOCTOU between the async cap COUNT and the async INSERT — without it a
+    // second /wtb issued while the first INSERT is still stalled (SQLite busy)
+    // could pass the cap check and exceed max-listings.
+    private static final Set<UUID> CREATING =
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
+
     /** Used by ExpiryService to skip listings currently mid-fulfillment. */
     public static boolean isProcessing(int listingId) {
         return PROCESSING.contains(listingId);
     }
 
-    private final ListingDAO         listingDAO = new ListingDAO();
-    private final ClaimBoxService    claimBox   = new ClaimBoxService();
+    private final ListingDAO         listingDAO  = new ListingDAO();
+    private final ClaimBoxService    claimBox    = new ClaimBoxService();
+    private final ClaimBoxDAO        claimBoxDAO = new ClaimBoxDAO(); // transactional fulfil (fix #3)
     private final TransactionService txService  = new TransactionService();
     private final PriceHistoryService priceHist = new PriceHistoryService();
-
-    // ── Active-listing count (used by WTBCommand) ─────────────────────────────
-
-    public int countActiveListings(UUID buyer) {
-        return listingDAO.countActiveByBuyer(buyer);
-    }
 
     // ── Create ────────────────────────────────────────────────────────────────
 
@@ -53,30 +55,35 @@ public class ListingService {
      *       and the template's own material governs blocking rules</li>
      * </ul>
      *
-     * @return the persisted Listing, or null if creation failed for any reason.
+     * <p>Audit fix #10: validation and the Vault withdrawal stay on the main
+     * thread, but the two JDBC calls (per-player COUNT, INSERT) now run on the
+     * DbExecutor — the old shape ran both on the main thread, stalling ticks
+     * for up to the SQLite busy timeout under write contention.  Flow:
+     * main (validate) → async (count) → main (withdraw) → async (insert) →
+     * main (confirm, or refund on failure).
      */
-    public Listing createListing(Player buyer, Material material, EnchantSpec enchant,
-                                 ItemStack template, String customName,
-                                 int quantity, double totalPrice) {
+    public void createListing(Player buyer, Material material, EnchantSpec enchant,
+                              ItemStack template, String customName,
+                              int quantity, double totalPrice) {
 
         // Defense in depth: WTBCommand already rejects these before calling here,
         // but any future caller (admin tooling, external API, another command)
         // gets the same protection without needing to remember to re-check.
         if (template != null) {
-            if (enchant != null) return null; // invalid combination — programmer error
+            if (enchant != null) return; // invalid combination — programmer error
             material = template.getType();
             if (!Main.isTemplateTradeable(material)) {
                 buyer.sendMessage(Main.msg("material_blocked"));
-                return null;
+                return;
             }
         } else {
             if (!Main.isTradeable(material)) {
                 buyer.sendMessage(Main.msg("material_blocked"));
-                return null;
+                return;
             }
             if (Main.requiresEnchantSpec(material) != (enchant != null)) {
                 buyer.sendMessage(Main.msg(enchant == null ? "enchant_required" : "enchant_not_allowed"));
-                return null;
+                return;
             }
         }
 
@@ -85,66 +92,154 @@ public class ListingService {
         if (quantity > maxQty) {
             buyer.sendMessage(Main.msg("max_quantity_exceeded")
                     .replace("{max}", String.valueOf(maxQty)));
-            return null;
+            return;
         }
 
         // Overflow guard for the integer-cents escrow math (see Payout).
         if (totalPrice > Payout.MAX_TOTAL_PRICE) {
             buyer.sendMessage(Main.msg("invalid_price"));
-            return null;
+            return;
         }
 
-        double pricePerItem = totalPrice / quantity;
+        // Audit fix #11: escrow accounting runs in whole cents (HALF_UP), so a
+        // price with more than two decimals would make the Vault withdrawal
+        // (raw double) diverge from the escrowed amount — e.g. 1.005 withdrew
+        // $1.005 but refunded $1.01, minting money.  Reject sub-cent prices
+        // and withdraw exactly the amount the escrow will account for.
+        long priceCents = Payout.toCents(totalPrice);
+        if (Math.abs(totalPrice * 100.0 - priceCents) > 1e-6) {
+            buyer.sendMessage(Main.msg("invalid_price"));
+            return;
+        }
+        final double price = Payout.toMoney(priceCents);
+
+        double pricePerItem = price / quantity;
         double minPricePerItem = Main.getSettings().getDouble("settings.listing.min-price-per-item", 1.0);
         if (pricePerItem < minPricePerItem) {
             buyer.sendMessage(Main.msg("price_per_item_low")
                     .replace("{min_price}", Format.money(minPricePerItem)));
-            return null;
+            return;
         }
 
-        // Withdraw first (Vault must be on main thread).
-        if (!Main.getEconomy().withdrawPlayer(buyer, totalPrice).transactionSuccess()) {
-            buyer.sendMessage(Main.msg("not_enough_money"));
-            return null;
-        }
+        final Material    fMaterial = material;
+        final EnchantSpec fEnchant  = enchant;
+        final int         maxListings =
+                Main.getSettings().getInt("settings.listing.max-listings", 5);
 
-        int  expiryDays = Main.getSettings().getInt("settings.listing.expiry-days", 7);
-        long now        = System.currentTimeMillis();
-        long expiresAt  = now + (expiryDays * 24L * 60 * 60 * 1000);
-
-        byte[] itemBytes = null;
+        byte[] bytes = null;
         if (template != null) {
             ItemStack one = template.clone();
             one.setAmount(1);
-            itemBytes = one.serializeAsBytes();
+            bytes = one.serializeAsBytes();
+        }
+        final byte[] itemBytes = bytes;
+        final UUID uuid = buyer.getUniqueId();
+
+        // One create pipeline per player: closes the cap-check TOCTOU.
+        if (!CREATING.add(uuid)) {
+            buyer.sendMessage(Main.msg("buy_cooldown"));
+            return;
         }
 
-        Listing listing = new Listing(-1, buyer.getUniqueId(), material, enchant,
-                itemBytes, customName,
-                quantity, quantity, totalPrice, now, expiresAt, ListingState.OPEN);
+        // Listing cap — COUNT off-thread.
+        boolean accepted = DbExecutor.submit(() -> {
+            int active = listingDAO.countActiveByBuyer(uuid);
 
-        Listing created = listingDAO.create(listing);
+            Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
+                if (!buyer.isOnline()) { // left before anything was withdrawn
+                    CREATING.remove(uuid);
+                    return;
+                }
 
-        if (created == null || created.getId() == -1) {
-            // DB failed — refund the withdrawn money to avoid loss.
-            Main.getEconomy().depositPlayer(buyer, totalPrice);
-            buyer.sendMessage(Main.msg("buy_create_failed"));
-            LogService.log("listing-created",
-                    "DB ERROR: failed to persist listing for " + buyer.getName());
-            return null;
+                if (active >= maxListings) {
+                    CREATING.remove(uuid);
+                    buyer.sendMessage(Main.msg("max_listings_reached")
+                            .replace("{max}", String.valueOf(maxListings)));
+                    return;
+                }
+
+                // Withdraw (Vault must be on main thread).
+                if (!Main.getEconomy().withdrawPlayer(buyer, price).transactionSuccess()) {
+                    CREATING.remove(uuid);
+                    buyer.sendMessage(Main.msg("not_enough_money"));
+                    return;
+                }
+
+                int  expiryDays = Main.getSettings().getInt("settings.listing.expiry-days", 7);
+                long now        = System.currentTimeMillis();
+                long expiresAt  = now + (expiryDays * 24L * 60 * 60 * 1000);
+
+                Listing listing = new Listing(-1, buyer.getUniqueId(), fMaterial, fEnchant,
+                        itemBytes, customName,
+                        quantity, quantity, price, now, expiresAt, ListingState.OPEN);
+
+                // INSERT off-thread; outcome back on the main thread.
+                boolean insertQueued = DbExecutor.submit(() -> {
+                    Listing created;
+                    boolean ok;
+                    try {
+                        created = listingDAO.create(listing);
+                        ok = created != null && created.getId() != -1;
+                    } finally {
+                        CREATING.remove(uuid);
+                    }
+
+                    if (ok) {
+                        LogService.log("listing-created",
+                                buyer.getName() + " created listing: " + quantity + "x "
+                                        + created.displayName()
+                                        + " for " + Format.money(price)
+                                        + " (ID: " + created.getId() + ")");
+                    } else {
+                        // DB failed — refund the withdrawn money via the CLAIM BOX,
+                        // written HERE on the executor thread (audit fixes #12 + #2).
+                        // A main-thread Vault deposit via runTask would be silently
+                        // dropped if this failure happens during shutdown (the
+                        // scheduler has stopped ticking while onDisable drains us),
+                        // destroying the escrow.  The claim-box row is durable and
+                        // needs no economy call.
+                        claimBox.addRefundDirect(uuid, price);
+                        LogService.log("listing-created",
+                                "DB ERROR: failed to persist listing for " + buyer.getName()
+                                        + " — " + Format.money(price)
+                                        + " refunded via claim box.");
+                    }
+
+                    final Listing fCreated = created;
+                    final boolean fOk      = ok;
+                    Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
+                        if (!fOk) {
+                            if (buyer.isOnline()) {
+                                buyer.sendMessage(Main.msg("buy_create_failed"));
+                                buyer.sendMessage(Main.msg("collect_items"));
+                            }
+                            return;
+                        }
+
+                        Main.getMainGUI().clearCache();
+                        if (buyer.isOnline()) {
+                            buyer.sendMessage(Main.msg("buy_created")
+                                    .replace("{material}", fCreated.displayName())
+                                    .replace("{quantity}", String.valueOf(quantity))
+                                    .replace("{price}",    Format.money(price)));
+                        }
+                    });
+                });
+
+                if (!insertQueued) {
+                    // Executor drained (shutdown raced this create): the money was
+                    // withdrawn on this (main) thread — refund it durably NOW.
+                    CREATING.remove(uuid);
+                    claimBox.addRefundDirect(uuid, price);
+                    buyer.sendMessage(Main.msg("buy_create_failed"));
+                }
+            });
+        });
+
+        if (!accepted) {
+            // Count task never queued — nothing withdrawn; just release the lock.
+            CREATING.remove(uuid);
         }
-
-        buyer.sendMessage(Main.msg("buy_created")
-                .replace("{material}", created.displayName())
-                .replace("{quantity}", String.valueOf(quantity))
-                .replace("{price}",    Format.money(totalPrice)));
-
-        LogService.log("listing-created",
-                buyer.getName() + " created listing: " + quantity + "x " + created.displayName()
-                        + " for " + Format.money(totalPrice)
-                        + " (ID: " + created.getId() + ")");
-
-        return created;
     }
 
     // ── Cancel ────────────────────────────────────────────────────────────────
@@ -228,7 +323,7 @@ public class ListingService {
     public void cancelAllListings(Player player) {
         final UUID uuid = player.getUniqueId();
 
-        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+        DbExecutor.submit(() -> {
             List<Listing> active = listingDAO.getActiveByBuyer(uuid);
 
             int  cancelled   = 0;
@@ -423,21 +518,30 @@ public class ListingService {
             final String   fHistKey  = listing.historyKey(); // null for catalog/custom orders
             final String   fSellerName = seller.getName();
 
-            Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+            boolean queued = DbExecutor.submit(() -> {
                 try {
-                    // ── Step 1: atomic relative ownership claim ────────────────
-                    boolean claimed = listingDAO.fulfillIfActive(fId, fAmount, fPortion);
+                    // ── Steps 1-3 in ONE transaction (audit fix #3) ────────────
+                    // The ownership claim, dust settlement, and both claim-box
+                    // reward rows commit together or not at all.  The old shape
+                    // committed the decrement first and wrote rewards on
+                    // separate connections afterwards, so a failure or shutdown
+                    // in between destroyed the seller's removed items AND the
+                    // buyer's payment.
+                    FulfilOutcome outcome =
+                            fulfillTransactionally(fId, fAmount, fPortion, fPriceCts,
+                                    fSeller, fBuyer, stacks);
 
-                    if (!claimed) {
-                        // Return the seller's items via claim box so they are not lost,
-                        // and TELL them (V5 reverted silently — items just "appeared"
-                        // back in the claim box with no explanation).
+                    if (outcome == null) {
+                        // Not claimed (listing gone / raced) or transaction failed —
+                        // nothing was committed.  Return the seller's items via the
+                        // claim box so they are not lost, and TELL them (V5 reverted
+                        // silently — items just "appeared" back with no explanation).
                         for (ItemStack stack : stacks) {
                             claimBox.addItemDirect(fSeller, stack);
                         }
                         LogService.log("listing-collision",
-                                "Listing " + fId + " was no longer active (or lacked "
-                                        + fAmount + " remaining) when "
+                                "Listing " + fId + " could not be fulfilled ("
+                                        + "inactive, raced, or DB failure) when "
                                         + LogService.name(fSeller)
                                         + " attempted fulfillment — items returned to claim box.");
                         Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
@@ -449,30 +553,11 @@ public class ListingService {
                         return;
                     }
 
-                    // ── Step 2: read authoritative post-state, settle dust ─────
-                    long payoutCents = fPortion;
-                    int  dbRemaining = -1;
-                    Listing fresh = listingDAO.getById(fId);
-                    if (fresh != null) {
-                        dbRemaining = fresh.getRemainingQuantity();
-                        if (dbRemaining <= 0) {
-                            long dust = Payout.remainder(fPriceCts, fresh.getPaidCents());
-                            if (dust > 0 && listingDAO.settleDust(fId, fPriceCts)) {
-                                payoutCents += dust; // final seller receives the dust
-                            }
-                        }
-                    }
-                    final int    remaining = dbRemaining >= 0
-                            ? dbRemaining
+                    final int    remaining = outcome.remaining() >= 0
+                            ? outcome.remaining()
                             : Math.max(0, fOrigQty - fAmount); // fallback, display only
-                    final double payout    = Payout.toMoney(payoutCents);
+                    final double payout    = Payout.toMoney(outcome.payoutCents());
                     final boolean fullyFilled = remaining <= 0;
-
-                    // ── Step 3: ownership confirmed — write rewards ────────────
-                    claimBox.addMoneyDirect(fSeller, payout);
-                    for (ItemStack stack : stacks) {
-                        claimBox.addItemDirect(fBuyer, stack);
-                    }
 
                     // ── Step 4: notify AFTER the trade is real ─────────────────
                     String buyerMsg = (fullyFilled
@@ -503,7 +588,7 @@ public class ListingService {
                             b.sendMessage(Main.msg("collect_items"));
                         } else {
                             // Offline buyer → queue for next join (DB write → async).
-                            Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () ->
+                            DbExecutor.submit(() ->
                                     Main.getNotificationService().queue(fBuyer,
                                             buyerMsg + "\n" + Main.msg("collect_items")));
                         }
@@ -535,6 +620,21 @@ public class ListingService {
                 }
             });
 
+            if (!queued) {
+                // Executor drained (shutdown raced this click) — the seller's
+                // items were already removed above.  Return them durably NOW,
+                // on this thread; nothing was committed against the listing.
+                int restored = listing.getRemainingQuantity() + actualAmount;
+                listing.setRemainingQuantity(restored);
+                listing.setState(restored < listing.getOriginalQuantity()
+                        ? ListingState.PARTIAL : ListingState.OPEN);
+                for (ItemStack stack : stacks) {
+                    claimBox.addItemDirect(fSeller, stack);
+                }
+                seller.sendMessage(Main.msg("sale_reverted"));
+                return false; // finally below releases PROCESSING
+            }
+
             scheduledAsync = true;
             return true;
 
@@ -542,6 +642,83 @@ public class ListingService {
             if (!scheduledAsync) {
                 PROCESSING.remove(listing.getId());
             }
+        }
+    }
+
+    /** Result of a committed fulfilment: what to pay out and what remains (display). */
+    private record FulfilOutcome(long payoutCents, int remaining) {}
+
+    /**
+     * Runs the money-critical fulfilment writes as ONE database transaction
+     * (audit fix #3): the atomic relative ownership claim, the final-fill dust
+     * settlement, the seller's MONEY claim row, and the buyer's ITEM claim
+     * rows all commit together.  Any failure rolls the whole trade back —
+     * the listing is untouched and the caller reverts the seller's items.
+     *
+     * @return the committed outcome, or null if the listing was not claimable
+     *         or the transaction failed (nothing was committed either way).
+     */
+    private FulfilOutcome fulfillTransactionally(int id, int amount, long portionCents,
+                                                 long priceCents, UUID seller, UUID buyer,
+                                                 List<ItemStack> stacks) {
+        try (var conn = DatabaseManager.get().getConnection()) {
+            boolean restoreAutoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                // Step 1: atomic relative ownership claim.
+                if (!listingDAO.fulfillIfActive(conn, id, amount, portionCents)) {
+                    conn.rollback();
+                    return null;
+                }
+
+                // Step 2: read authoritative post-state, settle dust.
+                long payoutCents = portionCents;
+                int  dbRemaining = -1;
+                Listing fresh = listingDAO.getById(conn, id);
+                if (fresh != null) {
+                    dbRemaining = fresh.getRemainingQuantity();
+                    if (dbRemaining <= 0) {
+                        long dust = Payout.remainder(priceCents, fresh.getPaidCents());
+                        if (dust > 0 && listingDAO.settleDust(conn, id, priceCents)) {
+                            payoutCents += dust; // final seller receives the dust
+                        }
+                    }
+                }
+
+                // Step 3: reward rows — same transaction as the claim.
+                claimBoxDAO.addOrThrow(conn,
+                        new ClaimEntry(seller, ClaimType.MONEY, null, Payout.toMoney(payoutCents)));
+                for (ItemStack stack : stacks) {
+                    claimBoxDAO.addOrThrow(conn,
+                            new ClaimEntry(buyer, ClaimType.ITEM, stack, 0));
+                }
+
+                conn.commit();
+                return new FulfilOutcome(payoutCents, dbRemaining);
+            } catch (Exception e) {
+                try {
+                    conn.rollback();
+                } catch (Exception rollbackFailure) {
+                    rollbackFailure.printStackTrace();
+                }
+                LogService.log("listing-collision",
+                        "DB ERROR during fulfilment of listing " + id
+                                + " — transaction rolled back: " + e.getMessage());
+                e.printStackTrace();
+                return null;
+            } finally {
+                try {
+                    conn.setAutoCommit(restoreAutoCommit);
+                } catch (Exception ignored) {
+                    // Connection is about to be returned to the pool / closed.
+                }
+            }
+        } catch (Exception e) {
+            LogService.log("listing-collision",
+                    "DB ERROR during fulfilment of listing " + id
+                            + " — could not open transaction: " + e.getMessage());
+            e.printStackTrace();
+            return null;
         }
     }
 }

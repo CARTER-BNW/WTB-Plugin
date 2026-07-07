@@ -90,6 +90,11 @@ public class Main extends JavaPlugin {
         // Database (runs the automatic V5 → V6 schema migration on first boot).
         new wtb.database.DatabaseManager();
 
+        // Plugin-owned async DB executor — all reward/refund/notification
+        // writes go through it so onDisable can drain them before the pool
+        // closes (audit fix #2).
+        wtb.database.DbExecutor.init();
+
         // Services (singletons)
         listingService      = new ListingService();
         claimBoxService     = new ClaimBoxService();
@@ -126,6 +131,14 @@ public class Main extends JavaPlugin {
         if (expiryService != null) {
             expiryService.stop();
         }
+        // Audit fix #2 — order matters:
+        //  1. Drain every queued/in-flight async DB write (rewards, refunds,
+        //     notifications) BEFORE anything they depend on goes away.
+        //  2. Close the file log (drained tasks may still have logged).
+        //  3. Only then close the connection pool.
+        // The old order closed the pool with writes still pending, so a plain
+        // restart moments after a trade destroyed the owed money and items.
+        wtb.database.DbExecutor.shutdownAndDrain(10);
         LogService.closeWriter();
         // Guard: if onEnable returned early (e.g. no Vault), DatabaseManager was never created.
         var dbManager = wtb.database.DatabaseManager.get();

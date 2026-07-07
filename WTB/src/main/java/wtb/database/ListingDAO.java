@@ -85,29 +85,44 @@ public class ListingDAO {
      * Exactly one concurrent writer can win any given unit of quantity — even
      * across multiple servers sharing one MySQL database.
      *
+     * <p><b>Assignment order matters (audit fix #1):</b> MySQL evaluates SET
+     * assignments left-to-right and lets a later assignment see the
+     * <i>already-updated</i> value of an earlier one, while SQLite always
+     * resolves against the original row.  The {@code state} CASE therefore
+     * MUST come before the {@code remaining_quantity} decrement — with the old
+     * order, MySQL computed {@code (remaining - amt) - amt} and marked partial
+     * fills FILLED, permanently stranding the buyer's remaining escrow.
+     *
      * @return true if the claim succeeded (rewards may be written);
      *         false if the listing was already filled/expired/cancelled or no
      *         longer has {@code amount} remaining (caller must revert).
      */
     public boolean fulfillIfActive(int id, int amount, long payoutCents) {
-        String sql = """
-            UPDATE listings
-            SET remaining_quantity = remaining_quantity - ?,
-                paid_cents         = paid_cents + ?,
-                state = CASE WHEN remaining_quantity - ? <= 0 THEN 'FILLED' ELSE 'PARTIAL' END
-            WHERE id = ? AND state IN ('OPEN','PARTIAL') AND remaining_quantity >= ?
-        """;
-        try (var conn = DatabaseManager.get().getConnection();
-             var stmt = conn.prepareStatement(sql)) {
-            stmt.setInt(1,  amount);
-            stmt.setLong(2, payoutCents);
-            stmt.setInt(3,  amount);
-            stmt.setInt(4,  id);
-            stmt.setInt(5,  amount);
-            return stmt.executeUpdate() > 0;
+        try (var conn = DatabaseManager.get().getConnection()) {
+            return fulfillIfActive(conn, id, amount, payoutCents);
         } catch (SQLException e) {
             e.printStackTrace();
             return false;
+        }
+    }
+
+    /** Same claim on the CALLER's connection — used by the transactional fulfilment (audit fix #3). */
+    public boolean fulfillIfActive(Connection conn, int id, int amount, long payoutCents)
+            throws SQLException {
+        String sql = """
+            UPDATE listings
+            SET state = CASE WHEN remaining_quantity - ? <= 0 THEN 'FILLED' ELSE 'PARTIAL' END,
+                remaining_quantity = remaining_quantity - ?,
+                paid_cents         = paid_cents + ?
+            WHERE id = ? AND state IN ('OPEN','PARTIAL') AND remaining_quantity >= ?
+        """;
+        try (var stmt = conn.prepareStatement(sql)) {
+            stmt.setInt(1,  amount);
+            stmt.setInt(2,  amount);
+            stmt.setLong(3, payoutCents);
+            stmt.setInt(4,  id);
+            stmt.setInt(5,  amount);
+            return stmt.executeUpdate() > 0;
         }
     }
 
@@ -119,15 +134,21 @@ public class ListingDAO {
      * @return true if the row was updated.
      */
     public boolean settleDust(int id, long fullPriceCents) {
-        String sql = "UPDATE listings SET paid_cents = ? WHERE id = ? AND state = 'FILLED'";
-        try (var conn = DatabaseManager.get().getConnection();
-             var stmt = conn.prepareStatement(sql)) {
-            stmt.setLong(1, fullPriceCents);
-            stmt.setInt(2, id);
-            return stmt.executeUpdate() > 0;
+        try (var conn = DatabaseManager.get().getConnection()) {
+            return settleDust(conn, id, fullPriceCents);
         } catch (SQLException e) {
             e.printStackTrace();
             return false;
+        }
+    }
+
+    /** Same dust settlement on the CALLER's connection (audit fix #3). */
+    public boolean settleDust(Connection conn, int id, long fullPriceCents) throws SQLException {
+        String sql = "UPDATE listings SET paid_cents = ? WHERE id = ? AND state = 'FILLED'";
+        try (var stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, fullPriceCents);
+            stmt.setInt(2, id);
+            return stmt.executeUpdate() > 0;
         }
     }
 
@@ -166,9 +187,18 @@ public class ListingDAO {
     // ── Read operations ──────────────────────────────────────────────────────
 
     public Listing getById(int id) {
+        try (var conn = DatabaseManager.get().getConnection()) {
+            return getById(conn, id);
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /** Same lookup on the CALLER's connection (audit fix #3). */
+    public Listing getById(Connection conn, int id) throws SQLException {
         String sql = "SELECT * FROM listings WHERE id=?";
-        try (var conn = DatabaseManager.get().getConnection();
-             var stmt = conn.prepareStatement(sql)) {
+        try (var stmt = conn.prepareStatement(sql)) {
             stmt.setInt(1, id);
             try (var rs = stmt.executeQuery()) {
                 if (!rs.next()) return null;
@@ -179,9 +209,6 @@ public class ListingDAO {
                     return null;
                 }
             }
-        } catch (SQLException e) {
-            e.printStackTrace();
-            return null;
         }
     }
 

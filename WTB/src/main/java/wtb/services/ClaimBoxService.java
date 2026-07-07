@@ -21,11 +21,14 @@ public class ClaimBoxService {
     private final ClaimBoxDAO dao = new ClaimBoxDAO();
 
     // ── Async add variants (for main-thread callers) ──────────────────────────
+    // Audit fix #2: these run on the plugin-owned DbExecutor (drained in
+    // onDisable BEFORE the pool closes), not the Bukkit async scheduler whose
+    // queued tasks never run once the server starts stopping.
 
     /** Queues an item reward asynchronously. Clones the stack before capture. */
     public void addItem(UUID player, ItemStack item) {
         ItemStack copy = item.clone();
-        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+        wtb.database.DbExecutor.submit(() -> {
             if (!dao.add(new ClaimEntry(player, ClaimType.ITEM, copy, 0))) {
                 LOG.severe("[WTB] Failed to queue ITEM claim for player " + player);
             }
@@ -34,7 +37,7 @@ public class ClaimBoxService {
 
     /** Queues a money reward asynchronously. */
     public void addMoney(UUID player, double amount) {
-        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+        wtb.database.DbExecutor.submit(() -> {
             if (!dao.add(new ClaimEntry(player, ClaimType.MONEY, null, amount))) {
                 LOG.severe("[WTB] Failed to queue MONEY claim for player " + player
                         + " (amount=" + amount + ")");
@@ -44,7 +47,7 @@ public class ClaimBoxService {
 
     /** Queues a refund asynchronously. */
     public void addRefund(UUID player, double amount) {
-        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+        wtb.database.DbExecutor.submit(() -> {
             if (!dao.add(new ClaimEntry(player, ClaimType.REFUND, null, amount))) {
                 LOG.severe("[WTB] Failed to queue REFUND claim for player " + player
                         + " (amount=" + amount + ")");
@@ -199,9 +202,14 @@ public class ClaimBoxService {
                 ? entry.getItem().clone() : null;
         ClaimEntry fresh = new ClaimEntry(
                 entry.getPlayer(), entry.getType(), itemCopy, entry.getMoney());
-        if (!dao.add(fresh)) {
-            LOG.severe("[WTB] CRITICAL: Failed to re-queue claim entry for " + playerName
-                    + " (type=" + entry.getType() + "). Reward may be permanently lost!");
-        }
+        // Audit fix #10: requeue is reached from main-thread claim paths — run
+        // the INSERT on the DbExecutor (drained at shutdown) instead of doing
+        // synchronous JDBC on the main thread.
+        wtb.database.DbExecutor.submit(() -> {
+            if (!dao.add(fresh)) {
+                LOG.severe("[WTB] CRITICAL: Failed to re-queue claim entry for " + playerName
+                        + " (type=" + entry.getType() + "). Reward may be permanently lost!");
+            }
+        });
     }
 }

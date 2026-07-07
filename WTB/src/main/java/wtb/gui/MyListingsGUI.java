@@ -71,7 +71,9 @@ public class MyListingsGUI {
     // ── Render ────────────────────────────────────────────────────────────────
 
     private void render(Player player, int page, List<Listing> all) {
-        Inventory inv = Bukkit.createInventory(null, GUI_SIZE, TITLE);
+        WtbGuiHolder holder = new WtbGuiHolder(WtbGuiHolder.Type.MY_LISTINGS);
+        Inventory inv = Bukkit.createInventory(holder, GUI_SIZE, TITLE);
+        holder.setInventory(inv);
         UUID id = player.getUniqueId();
 
         boolean filterOpen   = isShowOpen(id);
@@ -118,6 +120,11 @@ public class MyListingsGUI {
         if (item == null) item = new ItemStack(Material.BARRIER); // unresolvable spec
 
         ItemMeta  meta = item.getItemMeta();
+        if (meta == null) {
+            // Meta-less template (corrupt DB row) — don't NPE the whole render.
+            item = new ItemStack(Material.BARRIER);
+            meta = item.getItemMeta();
+        }
 
         double pricePerUnit = listing.getOriginalQuantity() > 0
                 ? listing.getOriginalPrice() / listing.getOriginalQuantity()

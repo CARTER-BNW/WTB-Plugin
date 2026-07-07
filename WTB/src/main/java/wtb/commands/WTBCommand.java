@@ -198,22 +198,13 @@ public class WTBCommand implements CommandExecutor {
         }
         buyCooldowns.put(player.getUniqueId(), now);
 
-        // ── Listing cap (COUNT query, fast with index, acceptable on main thread)
-        int maxListings = Main.getSettings().getInt("settings.listing.max-listings", 5);
-        int active      = Main.getListingService().countActiveListings(player.getUniqueId());
-        if (active >= maxListings) {
-            player.sendMessage(Main.msg("max_listings_reached")
-                    .replace("{max}", String.valueOf(maxListings)));
-            return true;
-        }
-
-        // createListing: Vault withdrawal + DB write (all on main thread as Vault requires).
-        // It handles its own messaging and rolls back the withdrawal on DB failure.
+        // createListing runs the listing-cap COUNT and the INSERT off-thread
+        // (audit fix #10) and keeps the Vault withdrawal on the main thread.
+        // It handles its own messaging, cache clear, and rollback on failure.
         ItemStack template   = cat != null ? cat.template() : null;
         String    customName = cat != null ? cat.getLabel() : null;
         Main.getListingService().createListing(
                 player, mat, enchant, template, customName, quantity, price);
-        Main.getMainGUI().clearCache();
         return true;
     }
 
@@ -321,7 +312,9 @@ public class WTBCommand implements CommandExecutor {
         }
 
         final int fId = id;
-        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+        // DbExecutor (audit fix #2): this WRITES (cancel + refund), so it must
+        // drain on shutdown rather than die with the Bukkit async queue.
+        wtb.database.DbExecutor.submit(() -> {
             Listing listing = new ListingDAO().getById(fId);
 
             if (listing == null) {

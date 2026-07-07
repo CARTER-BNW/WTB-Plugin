@@ -60,7 +60,9 @@ public class TransactionsGUI {
     // ── Render ────────────────────────────────────────────────────────────────
 
     private void render(Player player, int page, List<Transaction> txList) {
-        Inventory inv = Bukkit.createInventory(null, GUI_SIZE, TITLE);
+        WtbGuiHolder holder = new WtbGuiHolder(WtbGuiHolder.Type.TRANSACTIONS);
+        Inventory inv = Bukkit.createInventory(holder, GUI_SIZE, TITLE);
+        holder.setInventory(inv);
 
         int start = Math.max(0, page * 45);
         int end   = Math.min(start + 45, txList.size());
@@ -91,6 +93,11 @@ public class TransactionsGUI {
         if (item == null) item = new ItemStack(tx.getMaterial()); // spec no longer resolves
 
         ItemMeta  meta = item.getItemMeta();
+        if (meta == null) {
+            // Meta-less stack (corrupt material in DB) — don't NPE the render.
+            item = new ItemStack(Material.BARRIER);
+            meta = item.getItemMeta();
+        }
 
         // NameCache: checks online players first (no disk I/O), then TTL cache.
         String buyerName  = NameCache.getName(tx.getBuyer());

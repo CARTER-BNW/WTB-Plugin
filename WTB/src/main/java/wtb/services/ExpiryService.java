@@ -2,38 +2,37 @@ package wtb.services;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitTask;
 import wtb.Main;
+import wtb.database.DbExecutor;
 import wtb.database.ListingDAO;
 import wtb.models.Listing;
 import wtb.utils.Format;
 import wtb.utils.Payout;
 
 import java.util.List;
+import java.util.concurrent.ScheduledFuture;
 
 public class ExpiryService {
 
     private final ListingDAO      listingDAO = new ListingDAO();
     private final ClaimBoxService claimBox   = new ClaimBoxService();
 
-    private BukkitTask task; // stored so we can cancel on plugin disable
+    private ScheduledFuture<?> task; // stored so we can cancel on plugin disable
 
     public void start() {
-        long intervalMins  = Main.getSettings().getLong("settings.expiry.check-interval-minutes", 10);
-        long intervalTicks = intervalMins * 60L * 20L;
+        long intervalMins = Main.getSettings().getLong("settings.expiry.check-interval-minutes", 10);
+        long intervalMs   = intervalMins * 60_000L;
 
-        task = Bukkit.getScheduler().runTaskTimerAsynchronously(
-                Main.getInstance(),
-                this::checkExpired,
-                intervalTicks,
-                intervalTicks
-        );
+        // Audit fix #2: runs on the plugin-owned DbExecutor (not the Bukkit
+        // async scheduler) so an in-flight sweep is drained in onDisable()
+        // before the connection pool closes, instead of racing it.
+        task = DbExecutor.scheduleRepeating(this::checkExpired, intervalMs, intervalMs);
     }
 
     /** Cancel the repeating task.  Called from Main.onDisable(). */
     public void stop() {
-        if (task != null && !task.isCancelled()) {
-            task.cancel();
+        if (task != null) {
+            task.cancel(false); // let an in-flight sweep finish; DbExecutor drains it
         }
     }
 

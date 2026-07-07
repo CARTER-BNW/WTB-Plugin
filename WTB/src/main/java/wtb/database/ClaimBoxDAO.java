@@ -4,7 +4,6 @@ import wtb.models.*;
 
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.io.BukkitObjectInputStream;
-import org.bukkit.util.io.BukkitObjectOutputStream;
 
 import java.io.*;
 import java.sql.*;
@@ -18,7 +17,7 @@ public class ClaimBoxDAO {
     // ── Write operations ─────────────────────────────────────────────────────
 
     /**
-     * Inserts a new claim entry.
+     * Inserts a new claim entry on its own connection.
      *
      * <p>Bug #12 fix: returns {@code true} on success, {@code false} on DB error.
      * Also logs a SEVERE message on failure so the issue is visible in the
@@ -28,14 +27,32 @@ public class ClaimBoxDAO {
      * @return true if the row was inserted; false if a DB error occurred.
      */
     public boolean add(ClaimEntry entry) {
+        try (var conn = DatabaseManager.get().getConnection()) {
+            addOrThrow(conn, entry);
+            return true;
+        } catch (Exception e) {
+            // Bug #12 fix: log a visible error so admins are alerted to data loss.
+            LOG.severe("[WTB] FAILED to insert ClaimEntry for player="
+                    + entry.getPlayer() + " type=" + entry.getType()
+                    + " money=" + entry.getMoney() + ": " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * Inserts a new claim entry on the CALLER's connection, throwing on any
+     * failure instead of returning a flag.  Used by the transactional
+     * fulfilment path (audit fix #3) so a failed reward insert rolls back the
+     * whole trade — including the listing decrement — rather than being
+     * logged and lost.
+     */
+    public void addOrThrow(Connection conn, ClaimEntry entry) throws SQLException, IOException {
         String sql = """
             INSERT INTO claim_box (player, type, item, money, created_at)
             VALUES (?, ?, ?, ?, ?)
         """;
-
-        try (var conn = DatabaseManager.get().getConnection();
-             var stmt = conn.prepareStatement(sql)) {
-
+        try (var stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, entry.getPlayer().toString());
             stmt.setString(2, entry.getType().name());
 
@@ -54,15 +71,6 @@ public class ClaimBoxDAO {
             stmt.setLong(5,   entry.getCreatedAt());
 
             stmt.executeUpdate();
-            return true;
-
-        } catch (Exception e) {
-            // Bug #12 fix: log a visible error so admins are alerted to data loss.
-            LOG.severe("[WTB] FAILED to insert ClaimEntry for player="
-                    + entry.getPlayer() + " type=" + entry.getType()
-                    + " money=" + entry.getMoney() + ": " + e.getMessage());
-            e.printStackTrace();
-            return false;
         }
     }
 
@@ -152,20 +160,32 @@ public class ClaimBoxDAO {
 
     // ── Serialisation ────────────────────────────────────────────────────────
 
-    private byte[] serialize(ItemStack item) throws IOException {
+    /** Magic header of a Java object-serialization stream (legacy V5/V6.0 format). */
+    private static final byte[] JAVA_STREAM_MAGIC = {(byte) 0xAC, (byte) 0xED};
+
+    /**
+     * Audit fix #14: use {@link ItemStack#serializeAsBytes()} — the same
+     * DataVersion-aware format every other item column already uses — so a
+     * queued claim item survives a Minecraft version upgrade.  The old
+     * {@code BukkitObjectOutputStream} format had no data-version envelope and
+     * could silently drop a player's queued item across MC upgrades.
+     */
+    private byte[] serialize(ItemStack item) {
         if (item == null) return null;
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (BukkitObjectOutputStream oos = new BukkitObjectOutputStream(baos)) {
-            oos.writeObject(item);
-        }
-        return baos.toByteArray();
+        return item.serializeAsBytes();
     }
 
+    /** Reads the versioned format, falling back to legacy Java-stream blobs written before the fix. */
     private ItemStack deserialize(byte[] data) throws IOException, ClassNotFoundException {
         if (data == null) return null;
-        ByteArrayInputStream bais = new ByteArrayInputStream(data);
-        try (BukkitObjectInputStream ois = new BukkitObjectInputStream(bais)) {
-            return (ItemStack) ois.readObject();
+        if (data.length >= 2
+                && data[0] == JAVA_STREAM_MAGIC[0] && data[1] == JAVA_STREAM_MAGIC[1]) {
+            // Legacy row written by the pre-fix BukkitObjectOutputStream format.
+            ByteArrayInputStream bais = new ByteArrayInputStream(data);
+            try (BukkitObjectInputStream ois = new BukkitObjectInputStream(bais)) {
+                return (ItemStack) ois.readObject();
+            }
         }
+        return ItemStack.deserializeBytes(data);
     }
 }

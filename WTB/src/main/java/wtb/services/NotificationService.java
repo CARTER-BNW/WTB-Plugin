@@ -4,6 +4,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import wtb.Main;
+import wtb.database.DbExecutor;
 import wtb.database.NotificationDAO;
 
 import java.util.ArrayList;
@@ -42,7 +43,7 @@ public class NotificationService {
     public void deliverOnJoin(Player player) {
         final UUID uuid = player.getUniqueId();
 
-        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+        DbExecutor.submit(() -> {
             List<Object[]> rows = dao.get(uuid);
             if (rows.isEmpty()) return;
 
@@ -62,7 +63,7 @@ public class NotificationService {
                 if (!player.isOnline()) {
                     // Player left before the delay elapsed — re-queue asynchronously
                     // (DB write must not run on the main thread) so nothing is lost.
-                    Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+                    DbExecutor.submit(() -> {
                         for (String msg : messages) dao.add(uuid, msg);
                     });
                     return;

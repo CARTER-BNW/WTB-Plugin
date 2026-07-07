@@ -44,8 +44,6 @@ public class ConfirmSaleGUI {
 
     private static final int    GUI_SIZE     = 54;
     private static final String TITLE        = "§8Confirm Sale";
-    /** Plain title for MarketplaceClickListener.matchesTitle(). */
-    public  static final String TITLE_PLAIN  = "Confirm Sale";
 
     public  static final int SLOT_DENY    = 45;
     public  static final int SLOT_SUMMARY = 49;
@@ -147,7 +145,9 @@ public class ConfirmSaleGUI {
     // ── Render (main thread) ─────────────────────────────────────────────────
 
     private void render(Player player, List<Line> lines) {
-        Inventory inv = Bukkit.createInventory(null, GUI_SIZE, TITLE);
+        WtbGuiHolder holder = new WtbGuiHolder(WtbGuiHolder.Type.CONFIRM);
+        Inventory inv = Bukkit.createInventory(holder, GUI_SIZE, TITLE);
+        holder.setInventory(inv);
 
         int shown = Math.min(lines.size(), 45);
         long totalCents = 0;
