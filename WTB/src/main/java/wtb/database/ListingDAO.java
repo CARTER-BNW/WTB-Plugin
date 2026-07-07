@@ -109,6 +109,11 @@ public class ListingDAO {
     /** Same claim on the CALLER's connection — used by the transactional fulfilment (audit fix #3). */
     public boolean fulfillIfActive(Connection conn, int id, int amount, long payoutCents)
             throws SQLException {
+        // Defense in depth (stress-probe finding): a negative amount would
+        // INCREASE remaining_quantity — minting items.  The service layer
+        // already rejects amount <= 0, but this DAO must never trust callers
+        // with the sign of a quantity.  Same for a negative payout.
+        if (amount <= 0 || payoutCents < 0) return false;
         String sql = """
             UPDATE listings
             SET state = CASE WHEN remaining_quantity - ? <= 0 THEN 'FILLED' ELSE 'PARTIAL' END,
