@@ -1,0 +1,155 @@
+settings:
+  listing:
+    max-listings: 5
+    # V6: hard cap per single order (upper bound 100000 enforced in code)
+    max-quantity: 10000
+    min-price-per-item: 1.0
+    expiry-days: 7
+    fill-all-enabled: true
+    # V6: route every sale (single click AND fill-all) through the Approve/Deny
+    # confirmation screen before any items leave the seller's inventory.
+    confirm-enabled: true
+
+  expiry:
+    check-interval-minutes: 10
+
+  transactions:
+    history-limit: 200
+
+  blocked-materials:
+    - AIR
+    - BARRIER
+    - COMMAND_BLOCK
+    - CHAIN_COMMAND_BLOCK
+    - REPEATING_COMMAND_BLOCK
+    - STRUCTURE_BLOCK
+    - STRUCTURE_VOID
+    - JIGSAW
+
+  # Extra permission nodes that grant admin access in addition to wtb.admin
+  admin-groups: []
+
+logging:
+  enabled: true
+  listing-created: true
+  listing-filled: true
+  listing-partial: true
+  listing-cancelled: true
+  listing-expired: true
+  # V6: a fulfillment lost the race against a cancel/expiry/other seller and
+  # was safely reverted (items returned via claim box)
+  listing-collision: true
+  # V6: /wtb cancel bulk-cancel summaries
+  bulk-cancel: true
+  # V6: Approve/Deny decisions on the sale-confirmation screen
+  confirm-approved: true
+  confirm-denied: true
+  # V6: offline notifications queued for later delivery
+  notifications: true
+  admin-actions: true
+  claim-money: true
+  claim-refund: true
+  claim-items: true
+
+messages:
+  # -- Buy / listing ---------------------------------------------------------
+  buy_created: "&aListing created: &e{quantity}x {material} &afor &e{price}&a."
+  buy_create_failed: "&cFailed to create your listing - please try again."
+  buy_cooldown: "&cPlease wait before creating another listing."
+  not_enough_money: "&cYou do not have enough money for this listing."
+  price_per_item_low: "&cThe price per item must be at least &e{min_price}&c."
+  max_listings_reached: "&cYou have reached the maximum of &e{max}&c active listings."
+  max_quantity_exceeded: "&cQuantity too large - the maximum per order is &e{max}&c."
+  material_blocked: "&cThat item is not allowed in the marketplace."
+  invalid_material: "&cUnknown item. Use a Minecraft material name or a catalog key (press TAB)."
+  invalid_quantity: "&cQuantity must be a positive whole number."
+  invalid_price: "&cPrice must be a positive number."
+
+  # -- Enchanted-book orders (V6) ---------------------------------------------
+  enchant_required: "&cEnchanted book orders need an enchantment: &e/wtb enchanted_book <qty> <price> <enchant> [level]"
+  enchant_not_allowed: "&cThis order type does not take extra arguments."
+  invalid_enchant: "&cUnknown enchantment. Press TAB to see valid names."
+  invalid_enchant_level: "&cInvalid level for that enchantment (max: &e{max}&c)."
+
+  # -- Item catalog (V6) -------------------------------------------------------
+  catalog_hand_empty: "&cHold the item you want to register."
+  catalog_key_invalid: "&cInvalid key. Use 2-40 lowercase letters/numbers/underscores; material names and command words are not allowed."
+  catalog_key_taken: "&cThat key is already registered."
+  catalog_key_unknown: "&cNo registered item under that key."
+  catalog_key_builtin: "&cBuilt-in catalog entries cannot be removed."
+  catalog_item_blocked: "&cThat item type cannot be traded (blocked or a storage container)."
+  catalog_registered: "&aRegistered &e{key}&a! Players can now order it: &e/wtb {key} <qty> <price>"
+  catalog_unregistered: "&aUnregistered &e{key}&a. Existing orders for it are unaffected."
+
+  # -- Fulfillment -------------------------------------------------------------
+  sold_items: "&aYou sold &e{amount}x {material} &afor &e{payout}&a!"
+  already_filled: "&cThat listing has already been filled."
+  listing_processing: "&cThat listing is currently being processed. Please try again."
+  no_self_trade: "&cYou cannot fill your own listing."
+  not_enough_items: "&cYou don't have a matching item. Only exact matches count (no damage, wrong enchants, or renames)."
+  listing_unfulfillable: "&cThis order's item can no longer be resolved on this server - it cannot be filled."
+  sale_reverted: "&cThat sale could not be completed (the order changed first). Your items are in your &eClaim Box&c."
+
+  order_filled_title: "&aBuy Order Filled!"
+  order_filled_subtitle: "&7Sold by: &f{seller}"
+  order_fully_filled: "&aYour buy order for &e{material} &ahas been fully filled by &e{seller}&a!"
+  order_partially_filled: "&aYour buy order for &e{material} &awas partially filled by &e{seller}&a. &e{remaining} &aitem(s) remaining."
+  collect_items: "&7Your items are waiting in your &eClaim Box&7."
+
+  # -- Sale confirmation (V6) ---------------------------------------------------
+  confirm_approved: "&aSale approved - filling &e{count}&a order(s)..."
+  confirm_expired: "&cThat confirmation expired. Please review the sale again."
+  sale_denied: "&7Sale cancelled - nothing left your inventory."
+
+  # -- Offline notifications (V6) -----------------------------------------------
+  notify_header: "&6&l[WTB] &eWhile you were away:"
+  order_expired: "&cYour buy order for &e{material} &cexpired. Refund of &e{refund} &cis in your Claim Box."
+  order_admin_cancelled: "&cYour buy order for &e{material} &cwas cancelled by an admin. Refund of &e{refund} &cis in your Claim Box."
+
+  # -- Cancellation --------------------------------------------------------------
+  listing_cancelled: "&aYour listing has been cancelled and a refund has been queued."
+  listing_already_processed: "&cThat listing has already been processed."
+  filled_items_in_claimbox: "&eThis listing is filled! Your items are in your Claim Box."
+  cancel_all_success: "&aCancelled &e{count}&a order(s). Refund of &e{refund}&a is in your Claim Box."
+  cancel_all_none: "&7You have no open buy orders to cancel."
+
+  # -- Claim Box ------------------------------------------------------------------
+  claim_money: "&aYou claimed &e{amount}&a!"
+  claim_refund: "&aRefund of &e{amount} &ahas been returned to your balance."
+  claim_item: "&aYou claimed &e{amount}x {material}&a!"
+  claim_inventory_full: "&cYour inventory is full - free up space and try again."
+  claim_failed_deposit: "&cFailed to deposit money. Contact an admin."
+  claim_item_corrupt: "&cThis item entry is corrupt and has been dismissed."
+  claim_all_success: "&aClaimed &e{count}&a item(s) from your Claim Box!"
+  claim_all_partial: "&aClaimed &e{count}&a item(s). &c{failed} could not be claimed (inventory full?)."
+
+  # -- Fill All ---------------------------------------------------------------------
+  fill_all_success: "&aFilling &e{count}&a open listing(s)..."
+  fill_all_none: "&cNo open listings matched your inventory."
+  fill_use_button: "&7Sale confirmation is disabled here - use the &eFill All &7button in the marketplace."
+
+  # -- Admin --------------------------------------------------------------------------
+  admin_cancel_success: "&aListing &e#{id} &a(buyer: &e{buyer}&a) has been force-cancelled."
+
+  # -- GUI / navigation ------------------------------------------------------------------
+  no_more_pages: "&cNo more pages."
+  no_permission: "&cYou do not have permission to do that."
+  unknown_command: "&cUnknown sub-command. Use /wtb help."
+  settings_reloaded: "&aWTB settings reloaded."
+
+  usage_buy: "&cUsage: /wtb <item> <quantity> <total_price>. <item> = material or catalog key. Books: /wtb enchanted_book <qty> <price> <enchant> [level]"
+  usage_admin: "&cUsage: /wtb admin <cancel|info> <listing_id> or /wtb admin <register|unregister> <key>"
+
+  help_message: |
+    &e=== WTB Help ===
+    &e/wtb &7- Open the marketplace
+    &e/wtb &f<item> <qty> <price> &7- Create a buy order (material or catalog key)
+    &e/wtb enchanted_book &f<qty> <price> <enchant> [lvl] &7- Order enchanted books
+    &e/wtb &fpotion_... / goat_horn_... / <server item> &7- Order exact special items
+    &e/wtb fill &7- Sell into every order you can (with confirmation)
+    &e/wtb cancel &7- Cancel ALL your open buy orders
+    &e/wtb my &7- View your buy orders
+    &e/wtb claim &7- Open your Claim Box
+    &e/wtb tx &7- View recent transactions
+    &e/wtb help &7- Show this help menu
+    &7Only exact-match items can fill orders (no damage, renames, or wrong enchants).
