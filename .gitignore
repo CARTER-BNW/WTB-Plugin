@@ -25,3 +25,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Build/test artifacts
+*.pdf
+*.class
+*.dll
+build.err
+wtb_logo.png

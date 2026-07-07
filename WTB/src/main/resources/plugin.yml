@@ -1,0 +1,27 @@
+name: WTB
+version: 6.0.0
+main: wtb.Main
+api-version: 1.21
+author: xJBACx
+depend:
+  - Vault
+
+commands:
+  wtb:
+    description: Main WTB marketplace command
+    usage: /wtb
+
+  wtbreload:
+    description: Reload WTB settings
+    usage: /wtbreload
+    permission: wtb.reload
+
+
+permissions:
+  wtb.admin:
+    description: Allows admin control of WTB listings
+    default: op
+
+  wtb.reload:
+    description: Allows reloading WTB config
+    default: op
