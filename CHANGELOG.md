@@ -1,5 +1,22 @@
 # WTB Changelog
 
+## v6.1.0 — 2026-07-11
+
+Hardening release: the v6 economy engine was put through a 20-player concurrent stress campaign on a live Paper 26.2 server — **~192,000 successful operations across three 45-second runs, with zero violations**: exact-cent money conservation (deposits == payouts + refunds + escrow, over ~$3M escrow per run), no oversell, no double-claims, no stuck money.
+
+### 🛡️ Hardening
+
+- **DAO-level fulfil guard** (`ListingDAO.fulfillIfActive`) — the raw DAO method now rejects zero and negative amounts outright. A negative amount passed at this level would have *increased* `remaining_quantity` (minting items). This was unreachable in production — the service layer already validates amounts — but the raw method is now safe on its own (defense in depth, found by stress probe P2).
+
+### 🧪 Stress-test harness (dev tool, not shipped in the plugin jar)
+
+- New `stress/` module: **WTBStress**, a companion plugin that drives WTB's *real* production code (the actual fulfil transaction, real create/cancel service methods) with 20 concurrent simulated players — weighted create/fulfil/cancel/expire/claim operations, dust-prone prices, deliberate race windows — then audits ten money invariants (exact-cents conservation, no oversell, dust settlement, exactly-once claims/refunds) plus six deterministic loophole probes.
+- ⚠️ **Never install `WTBStress` on a real server** — it wipes WTB's `listings` and `claim_box` tables each run. Test servers only.
+
+No database changes, no config changes — drop-in replacement for v6.0.0.
+
+---
+
 ## v6.0.0 — 2026-07-03
 
 Major feature release: tools & enchanted books are now tradeable via **pristine-item matching**, every sale goes through an **Approve/Deny confirmation screen**, buyers get **offline notifications**, and two newly discovered v5 economy exploits are eliminated. Upgrading from v5 is fully automatic — drop the jar in; the database migrates itself and no settings changes are required. An **item catalog** makes potions, tipped arrows, goat horns, fireworks, player heads, banners, and custom server items (god gear) tradeable by key with exact-meta matching.

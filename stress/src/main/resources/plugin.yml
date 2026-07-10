@@ -1,0 +1,11 @@
+name: WTBStress
+version: 1.0.0
+main: wtbstress.StressMain
+api-version: '1.21'
+depend: [WTB]
+description: Concurrency/economy stress harness for WTB (test servers only)
+
+commands:
+  wtbstress:
+    description: Run the WTB stress harness
+    usage: /wtbstress <players> <seconds> [adversarial|realistic]
