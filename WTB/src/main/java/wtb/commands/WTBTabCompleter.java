@@ -98,6 +98,14 @@ public class WTBTabCompleter implements TabCompleter {
                 ? Main.hasAdminPermission(p)
                 : sender.hasPermission("wtb.admin");
 
+        // V6.2: "/wtb settings X…" mirrors "/wtb X…" — delegate with the
+        // "settings" token stripped so nested completions stay in sync (the
+        // admin sub-command stays hidden for non-admins via the same check).
+        if (args.length >= 2 && args[0].equalsIgnoreCase("settings")) {
+            return onTabComplete(sender, command, alias,
+                    java.util.Arrays.copyOfRange(args, 1, args.length));
+        }
+
         List<String> completions = new ArrayList<>();
 
         if (args.length == 1) {
@@ -106,7 +114,8 @@ public class WTBTabCompleter implements TabCompleter {
             // Named sub-commands first ("buy" kept as legacy alias; the "cancle"
             // typo alias works but is deliberately NOT advertised here).
             List<String> subs = new ArrayList<>(
-                    List.of("buy", "fill", "cancel", "my", "claim", "tx", "help"));
+                    List.of("buy", "fill", "cancel", "my", "claim", "tx",
+                            "settings", "mute", "help"));
             if (isAdmin) subs.add("admin");
             for (String sub : subs) {
                 if (sub.startsWith(partial)) completions.add(sub);
@@ -124,6 +133,12 @@ public class WTBTabCompleter implements TabCompleter {
                 addItemTokens(completions, args[1].toLowerCase(Locale.ROOT));
             } else if (sub.equals("admin")) {
                 if (isAdmin) completions.addAll(List.of("cancel", "info", "register", "unregister"));
+            } else if (sub.equals("mute")) {
+                // V6.2: /wtb [settings] mute <full|partial|all|off>
+                String partial = args[1].toLowerCase(Locale.ROOT);
+                for (String mode : List.of("full", "partial", "all", "off")) {
+                    if (mode.startsWith(partial)) completions.add(mode);
+                }
             } else if (isItemToken(args[0])) {
                 // Direct: /wtb <item> <quantity>
                 completions.add("<quantity>");

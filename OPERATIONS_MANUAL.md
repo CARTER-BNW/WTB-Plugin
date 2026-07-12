@@ -153,6 +153,8 @@ The expiry task runs asynchronously and only queries listings that have already 
 
 Muting a popup only hides the full-screen title. The buyer still receives the chat message, the pickup sound, and their items in the Claim Box. Both keys are reloadable with `/wtbreload`, and servers upgrading from older versions get `true` automatically from the jar's bundled defaults.
 
+These keys are the **server-wide** switch. Since v6.2, players can additionally mute the popups for themselves with `/wtb settings mute` (see Player Commands) — a popup shows only when the server setting and the player's own preference both allow it.
+
 #### Blocked Materials
 
 ```yaml
@@ -255,9 +257,15 @@ For book orders, `{material}` renders as e.g. `ENCHANTED_BOOK (Mending 1)`.
 | `/wtb my` | View and manage your own buy orders |
 | `/wtb claim` | Open your Claim Box |
 | `/wtb tx` | View recent transaction history |
+| `/wtb settings` | v6.2: show your personal preferences (see below) |
+| `/wtb settings mute <full\|partial\|all\|off>` | v6.2: mute the order-filled screen popup for yourself — per fill type |
 | `/wtb help` | Show in-game help |
 
 `/wtb buy <material> …` still works as a legacy alias, and `cancle` is a silent typo alias for `cancel`.
+
+**The `/wtb settings` namespace (v6.2):** every player command also works prefixed with `settings` — `/wtb settings claim` is identical to `/wtb claim`, and so on — so all player-facing commands have one discoverable home. `/wtb settings` alone prints your current preferences. Admin commands are never suggested under `settings` for non-admins.
+
+**Per-player popup mute (v6.2):** `mute full` and `mute partial` toggle that popup type for you; `mute all` / `mute off` set both at once. Preferences are stored in the database (they survive relogs and restarts) and only affect the full-screen title — chat messages, the sound, offline notifications, and Claim Box delivery are never muted. The server-wide `settings.notifications.popup-on-*` keys still apply on top: a popup shows only when both the server and the player allow it.
 
 **Examples:**
 ```

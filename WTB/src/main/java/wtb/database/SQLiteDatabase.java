@@ -116,6 +116,16 @@ public class SQLiteDatabase implements DatabaseProvider {
                 );
             """);
 
+            // V6.2: per-player preferences (e.g. /wtb settings mute).
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS player_settings (
+                    player  TEXT NOT NULL,
+                    setting TEXT NOT NULL,
+                    value   TEXT NOT NULL,
+                    PRIMARY KEY (player, setting)
+                );
+            """);
+
             // V6: admin-registered item catalog (god items, heads, banners, …).
             // Built-in registry entries are generated at boot, never stored here.
             stmt.execute("""

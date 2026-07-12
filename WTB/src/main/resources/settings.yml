@@ -17,8 +17,11 @@ settings:
     history-limit: 200
 
   # V6.1.1: full-screen "Buy Order Filled!" title shown to the buyer the moment
-  # an order is filled. Set to false to mute the popup; the chat message, the
-  # pickup sound, and Claim Box delivery are unaffected. Reloadable via /wtbreload.
+  # an order is filled. Set to false to mute the popup SERVER-WIDE; the chat
+  # message, the pickup sound, and Claim Box delivery are unaffected.
+  # V6.2: players can also mute it individually with /wtb settings mute —
+  # a popup shows only when the server setting AND the player's own preference
+  # both allow it. Reloadable via /wtbreload.
   notifications:
     popup-on-full-fill: true
     popup-on-partial-fill: true
@@ -108,6 +111,17 @@ messages:
   confirm_expired: "&cThat confirmation expired. Please review the sale again."
   sale_denied: "&7Sale cancelled - nothing left your inventory."
 
+  # -- Player settings / mute (V6.2) ----------------------------------------------
+  settings_header: |
+    &e=== Your WTB Settings ===
+    &e/wtb settings mute &f<full|partial|all|off> &7- Mute the order-filled screen popup
+    &7Every player command also works here, e.g. &e/wtb settings claim&7.
+  mute_status: "&7Order-filled popup &8» &7full fills: {full}&7, partial fills: {partial}"
+  mute_updated: "&aSaved! &7Order-filled popup &8» &7full fills: {full}&7, partial fills: {partial}"
+  mute_usage: "&7Usage: &e/wtb settings mute <full|partial|all|off> &7(full/partial toggle one; all/off set both)"
+  mute_state_on: "&aON"
+  mute_state_muted: "&cMUTED"
+
   # -- Offline notifications (V6) -----------------------------------------------
   notify_header: "&6&l[WTB] &eWhile you were away:"
   order_expired: "&cYour buy order for &e{material} &cexpired. Refund of &e{refund} &cis in your Claim Box."
@@ -158,5 +172,6 @@ messages:
     &e/wtb my &7- View your buy orders
     &e/wtb claim &7- Open your Claim Box
     &e/wtb tx &7- View recent transactions
+    &e/wtb settings &7- Your personal settings (mute popup alerts, ...)
     &e/wtb help &7- Show this help menu
     &7Only exact-match items can fill orders (no damage, renames, or wrong enchants).

@@ -136,6 +136,16 @@ public class MySQLDatabase implements DatabaseProvider {
                 ) CHARACTER SET utf8mb4;
             """);
 
+            // V6.2: per-player preferences (e.g. /wtb settings mute).
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS player_settings (
+                    player  VARCHAR(36)  NOT NULL,
+                    setting VARCHAR(64)  NOT NULL,
+                    value   VARCHAR(255) NOT NULL,
+                    PRIMARY KEY (player, setting)
+                ) CHARACTER SET utf8mb4;
+            """);
+
             // V6: admin-registered item catalog (god items, heads, banners, …).
             // Built-in registry entries are generated at boot, never stored here.
             stmt.execute("""
