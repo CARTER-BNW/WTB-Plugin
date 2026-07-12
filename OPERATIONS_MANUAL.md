@@ -1,4 +1,4 @@
-# WTB v6.2.0 — Operations Manual
+# WTB v6.2.1 — Operations Manual
 
 **For server administrators and owners.**
 
@@ -36,7 +36,7 @@
 
 ### Installation Steps
 
-1. Drop `WTB-6.2.0.jar` into your server's `plugins/` folder.
+1. Drop `WTB-6.2.1.jar` into your server's `plugins/` folder.
 2. Confirm **Vault** and an economy plugin are already installed.
 3. Start (or restart) the server.
 4. WTB creates `plugins/WTB/settings.yml` and `plugins/WTB/config.yml` automatically.
@@ -50,7 +50,7 @@
 The v5 → v6 upgrade is fully automatic:
 
 1. Stop the server (recommended) and back up `plugins/WTB/wtb.db` (or your MySQL database).
-2. Replace the old jar with `WTB-6.2.0.jar`.
+2. Replace the old jar with `WTB-6.2.1.jar`.
 3. Start the server.
 
 On first boot the console logs each migration step:
@@ -639,4 +639,4 @@ The order's enchantment key (usually from a removed datapack) no longer resolves
 
 ---
 
-*WTB v6.2.0 · Paper 1.21+ (verified through 26.2) · Author: xJBACx*
+*WTB v6.2.1 · Paper 1.21+ (verified through 26.2) · Author: xJBACx*

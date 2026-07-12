@@ -108,6 +108,18 @@ public class ClaimBoxService {
      *         the player is offline, or the reward failed.
      */
     public boolean claim(Player player, ClaimEntry entry) {
+        return claim(player, entry, false);
+    }
+
+    /**
+     * As {@link #claim(Player, ClaimEntry)}, with {@code quiet} suppressing the
+     * per-entry chat messages.  Claim All uses this (V6.2.1): a large claim box
+     * is hundreds of entries, and per-entry feedback flooded the chat — one
+     * "inventory full" line per stack that didn't fit.  The batch sends a
+     * single summary at the end instead.  Money/refund grants, requeues, and
+     * file logging are identical in both modes.
+     */
+    public boolean claim(Player player, ClaimEntry entry, boolean quiet) {
 
         // Bug #7 fix: refuse to run off the main thread — Vault/inventory APIs are not
         // thread-safe, and silent corruption is worse than a logged refusal.
@@ -134,11 +146,11 @@ public class ClaimBoxService {
                 EconomyResponse resp = Main.getEconomy().depositPlayer(player, entry.getMoney());
                 if (!resp.transactionSuccess()) {
                     requeue(entry, player.getName());
-                    player.sendMessage(Main.msg("claim_failed_deposit"));
+                    if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
                     return false;
                 }
                 String fmt = Format.money(entry.getMoney());
-                player.sendMessage(Main.msg("claim_money").replace("{amount}", fmt));
+                if (!quiet) player.sendMessage(Main.msg("claim_money").replace("{amount}", fmt));
                 LogService.log("claim-money",
                         player.getName() + " claimed " + fmt + " from Claim Box");
             }
@@ -147,11 +159,11 @@ public class ClaimBoxService {
                 EconomyResponse resp = Main.getEconomy().depositPlayer(player, entry.getMoney());
                 if (!resp.transactionSuccess()) {
                     requeue(entry, player.getName());
-                    player.sendMessage(Main.msg("claim_failed_deposit"));
+                    if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
                     return false;
                 }
                 String fmt = Format.money(entry.getMoney());
-                player.sendMessage(Main.msg("claim_refund").replace("{amount}", fmt));
+                if (!quiet) player.sendMessage(Main.msg("claim_refund").replace("{amount}", fmt));
                 LogService.log("claim-refund",
                         player.getName() + " claimed refund of " + fmt + " from Claim Box");
             }
@@ -160,7 +172,7 @@ public class ClaimBoxService {
                 ItemStack stored = entry.getItem();
                 if (stored == null) {
                     // Corrupt entry: row was already deleted, just discard and log.
-                    player.sendMessage(Main.msg("claim_item_corrupt"));
+                    if (!quiet) player.sendMessage(Main.msg("claim_item_corrupt"));
                     LogService.log("claim-items",
                             player.getName() + " dismissed corrupt item entry (ID "
                                     + entry.getId() + ")");
@@ -171,11 +183,11 @@ public class ClaimBoxService {
                 if (!leftover.isEmpty()) {
                     // Inventory full — re-queue so the player can try again later.
                     requeue(entry, player.getName());
-                    player.sendMessage(Main.msg("claim_inventory_full"));
+                    if (!quiet) player.sendMessage(Main.msg("claim_inventory_full"));
                     return false;
                 }
 
-                player.sendMessage(Main.msg("claim_item")
+                if (!quiet) player.sendMessage(Main.msg("claim_item")
                         .replace("{amount}",   String.valueOf(stored.getAmount()))
                         .replace("{material}", stored.getType().name()));
                 LogService.log("claim-items",

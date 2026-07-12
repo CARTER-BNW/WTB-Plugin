@@ -414,7 +414,10 @@ public class MarketplaceClickListener implements Listener {
             int done = 0;
             while (!queue.isEmpty() && done < CLAIMS_PER_TICK) {
                 ClaimEntry entry = queue.poll();
-                if (Main.getClaimBoxService().claim(player, entry)) counters[0]++;
+                // quiet=true (V6.2.1): per-entry chat lines flooded the screen
+                // on big boxes ("inventory full" once per stack) — the summary
+                // below covers the whole run in one message.
+                if (Main.getClaimBoxService().claim(player, entry, true)) counters[0]++;
                 else counters[1]++;
                 done++;
             }
