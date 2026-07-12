@@ -1,4 +1,4 @@
-# WTB v6.0.0 — Operations Manual
+# WTB v6.2.0 — Operations Manual
 
 **For server administrators and owners.**
 
@@ -27,7 +27,7 @@
 
 | Requirement | Version |
 |---|---|
-| Paper | 1.21 or newer |
+| Paper | 1.21 or newer — verified working through Paper 26.2 |
 | Java | 21 or newer |
 | Vault | Any current release |
 | Economy plugin | EssentialsX, CMI, or any Vault-compatible provider |
@@ -36,7 +36,7 @@
 
 ### Installation Steps
 
-1. Drop `WTB-6.0.0.jar` into your server's `plugins/` folder.
+1. Drop `WTB-6.2.0.jar` into your server's `plugins/` folder.
 2. Confirm **Vault** and an economy plugin are already installed.
 3. Start (or restart) the server.
 4. WTB creates `plugins/WTB/settings.yml` and `plugins/WTB/config.yml` automatically.
@@ -50,7 +50,7 @@
 The v5 → v6 upgrade is fully automatic:
 
 1. Stop the server (recommended) and back up `plugins/WTB/wtb.db` (or your MySQL database).
-2. Replace the old jar with `WTB-6.0.0.jar`.
+2. Replace the old jar with `WTB-6.2.0.jar`.
 3. Start the server.
 
 On first boot the console logs each migration step:
@@ -237,6 +237,8 @@ All player-facing messages live under `messages:` in `settings.yml`. They suppor
 | `catalog_unregistered` *(v6)* | `{key}` |
 
 New v6 keys without placeholders: `enchant_required`, `enchant_not_allowed`, `invalid_enchant`, `listing_unfulfillable`, `sale_reverted`, `sale_denied`, `confirm_expired`, `cancel_all_none`, `notify_header`, `fill_use_button`, `catalog_hand_empty`, `catalog_key_invalid`, `catalog_key_taken`, `catalog_key_unknown`, `catalog_key_builtin`, `catalog_item_blocked`.
+
+New v6.2 keys (player settings / mute): `settings_header`, `mute_usage`, `mute_state_on`, `mute_state_muted` (no placeholders); `mute_status` and `mute_updated` take `{full}` and `{partial}`, which render as the `mute_state_on` / `mute_state_muted` text.
 
 For book orders, `{material}` renders as e.g. `ENCHANTED_BOOK (Mending 1)`.
 
@@ -637,4 +639,4 @@ The order's enchantment key (usually from a removed datapack) no longer resolves
 
 ---
 
-*WTB v6.0.0 · Paper 1.21+ · Author: xJBACx*
+*WTB v6.2.0 · Paper 1.21+ (verified through 26.2) · Author: xJBACx*
