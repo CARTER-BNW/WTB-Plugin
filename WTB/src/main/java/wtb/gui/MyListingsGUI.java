@@ -108,7 +108,9 @@ public class MyListingsGUI {
         if (end < filtered.size())
             inv.setItem(50, button(Material.ARROW, "§aNext Page"));
 
-        if (!player.isOnline()) return;
+        // Offline, or viewing a chest/another GUI while this open was queued —
+        // don't hijack it (V6.2.1).
+        if (!player.isOnline() || !WtbGuiHolder.mayOpenFor(player)) return;
         player.openInventory(inv);
     }
 

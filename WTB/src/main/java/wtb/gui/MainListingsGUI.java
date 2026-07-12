@@ -92,8 +92,10 @@ public class MainListingsGUI {
         if (Main.getSettings().getBoolean("settings.listing.fill-all-enabled", true))
             inv.setItem(SLOT_FILL_ALL, button(Material.HOPPER,         "§aFill All Open"));
 
-        // Player may have disconnected during the async fetch — don't open to a ghost.
-        if (!player.isOnline()) return;
+        // Player may have disconnected during the async fetch — don't open to
+        // a ghost — or opened a chest/another GUI while this open was queued —
+        // don't hijack it (V6.2.1).
+        if (!player.isOnline() || !WtbGuiHolder.mayOpenFor(player)) return;
         player.openInventory(inv);
     }
 

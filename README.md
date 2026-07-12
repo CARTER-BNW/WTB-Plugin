@@ -1,6 +1,6 @@
 # WTB — Want To Buy Marketplace
 
-> A fully async, SMP-safe **buy-order marketplace** plugin for Paper 1.21+ servers. Current version: **v6.2.0**.
+> A fully async, SMP-safe **buy-order marketplace** plugin for Paper 1.21+ servers. Current version: **v6.2.1**.
 
 Instead of auction-style selling, WTB flips the market: players post **buy orders** for the items they want, and other players browse the marketplace and sell straight from their inventory. Money and items are delivered through a per-player **Claim Box**, so nothing is ever lost — even if someone is offline.
 
@@ -36,7 +36,7 @@ Instead of auction-style selling, WTB flips the market: players post **buy order
 
 ## 🚀 Quick Start
 
-1. Drop `WTB-6.2.0.jar` into `plugins/`.
+1. Drop `WTB-6.2.1.jar` into `plugins/`.
 2. Make sure **Vault** and an economy plugin (EssentialsX, CMI, …) are installed.
 3. Start the server — `plugins/WTB/settings.yml` is generated automatically.
 4. Players type `/wtb` to open the marketplace. That's it.

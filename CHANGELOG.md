@@ -1,5 +1,30 @@
 # WTB Changelog
 
+## v6.2.1 — 2026-07-12
+
+Bug-fix release for two player-reported issues.
+
+### 🐛 Fixes
+
+- **Claim All chat flood** (`ClaimBoxService`, `MarketplaceClickListener`) — with a large
+  claim box (e.g. a 10,000-item order ≈ 157 stacks) and a full inventory, Claim All sent
+  one *"Your inventory is full"* line **per stack**, flooding the chat. Claim All now runs
+  in quiet mode: per-entry messages are suppressed and the existing single summary
+  (*"Claimed X item(s). Y could not be claimed (inventory full?)"*) reports the whole run.
+  Individual (single-click) claims keep their per-claim feedback; unclaimed stacks stay
+  safely in the Claim Box exactly as before.
+- **WTB screen hijacking chests** (`WtbGuiHolder`, all five GUIs) — many WTB screens open
+  a tick or more after the click that requested them (async database fetches, the Claim-All
+  batch chain). A player who closed WTB and immediately opened a chest — or another
+  plugin's GUI — inside that window had their view replaced by the late-firing WTB screen.
+  Every GUI open is now guarded: it only proceeds if a WTB GUI is still open (navigation /
+  refresh) or the player has no container open. No money/item paths are affected — the
+  claims and trades themselves always completed correctly; only the wrong screen was shown.
+
+No database changes, no config changes — drop-in replacement for v6.2.0.
+
+---
+
 ## v6.2.0 — 2026-07-12
 
 ### ✨ New
