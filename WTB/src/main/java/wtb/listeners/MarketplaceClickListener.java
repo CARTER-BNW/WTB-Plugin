@@ -48,6 +48,9 @@ public class MarketplaceClickListener implements Listener {
         // V6: deliver any "your order was filled/expired/cancelled while you
         // were offline" alerts a couple of seconds after login.
         Main.getNotificationService().deliverOnJoin(e.getPlayer());
+
+        // V6.2: load per-player preferences (popup mutes) into the cache.
+        Main.getPlayerSettingsService().loadOnJoin(e.getPlayer());
     }
 
     @EventHandler
@@ -62,6 +65,7 @@ public class MarketplaceClickListener implements Listener {
         CLAIMING_ALL.remove(uuid);
 
         WTBCommand.handlePlayerQuit(uuid);
+        Main.getPlayerSettingsService().handleQuit(uuid);
         // Clean up per-player GUI state to prevent memory leaks.
         Main.getMainGUI().cleanupPlayer(uuid);
         Main.getMyListingsGUI().cleanupPlayer(uuid);

@@ -48,7 +48,8 @@ public class CatalogService {
     /** Keys reserved by /wtb sub-commands — never allowed as catalog keys. */
     private static final Set<String> RESERVED = Set.of(
             "buy", "my", "claim", "tx", "help", "admin",
-            "fill", "cancel", "cancle", "hand");
+            "fill", "cancel", "cancle", "hand",
+            "settings", "mute"); // V6.2 sub-commands
 
     private static final Pattern KEY_PATTERN = Pattern.compile("[a-z0-9_]{2,40}");
 

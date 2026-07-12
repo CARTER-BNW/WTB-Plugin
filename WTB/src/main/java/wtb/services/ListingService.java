@@ -579,9 +579,14 @@ public class ListingService {
                         if (b != null && b.isOnline()) {
                             b.playSound(b.getLocation(),
                                     org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1f, 1f);
+                            // Server-wide toggle AND the buyer's own
+                            // /wtb settings mute preference (V6.2) must both
+                            // allow the popup.
                             boolean popup = Main.getSettings().getBoolean(fullyFilled
                                     ? "settings.notifications.popup-on-full-fill"
-                                    : "settings.notifications.popup-on-partial-fill", true);
+                                    : "settings.notifications.popup-on-partial-fill", true)
+                                    && !Main.getPlayerSettingsService()
+                                            .isPopupMuted(fBuyer, fullyFilled);
                             if (popup) {
                                 b.sendTitle(
                                         Main.msg("order_filled_title"),

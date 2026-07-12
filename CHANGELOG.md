@@ -1,5 +1,39 @@
 # WTB Changelog
 
+## v6.2.0 — 2026-07-12
+
+### ✨ New
+
+- **Per-player popup muting — `/wtb settings mute`** (`PlayerSettingsService`,
+  `PlayerSettingsDAO`, `WTBCommand`) — every player can now mute the full-screen
+  "Buy Order Filled!" popup for themselves, separately for partial and full fills:
+
+  - `/wtb settings mute full` — toggle the popup for **fully completed** orders
+  - `/wtb settings mute partial` — toggle the popup for **partial** fills
+  - `/wtb settings mute all` / `off` — mute / unmute both at once
+  - `/wtb settings mute` — show your current preference
+
+  Preferences persist in a new `player_settings` database table (created
+  automatically on first boot, SQLite and MySQL) and are cached in memory on join,
+  so the fulfil hot path never touches the database. Muting hides only the title
+  popup — chat message, sound, offline notifications, and Claim Box delivery are
+  unchanged. A popup shows only when the server-wide v6.1.1 setting AND the
+  player's own preference both allow it.
+
+- **`/wtb settings` namespace** (`WTBCommand`, `WTBTabCompleter`) — a discoverable
+  home for player commands and preferences. `/wtb settings <anything>` behaves
+  exactly like `/wtb <anything>` (`/wtb settings claim` opens the Claim Box, etc.),
+  and `/wtb settings` alone shows your current preferences. Existing commands are
+  untouched, so the transition is seamless. Admin commands are never advertised in
+  the settings tab completion for non-admins (and stay permission-gated regardless).
+
+- `mute` and `settings` are now reserved words for catalog keys (like the other
+  sub-commands), so no registered item can ever shadow them.
+
+Drop-in upgrade: the new table is created automatically; no config changes required.
+
+---
+
 ## v6.1.1 — 2026-07-11
 
 ### ✨ New

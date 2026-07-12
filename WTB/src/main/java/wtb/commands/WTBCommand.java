@@ -12,6 +12,7 @@ import wtb.database.ListingDAO;
 import wtb.models.CatalogEntry;
 import wtb.models.EnchantSpec;
 import wtb.models.Listing;
+import wtb.services.PlayerSettingsService;
 import wtb.utils.Format;
 import wtb.utils.NameCache;
 
@@ -65,6 +66,12 @@ public class WTBCommand implements CommandExecutor {
             // alias for the common typo — neither resolves as a material or
             // catalog key (CatalogService reserves both), so no shadowing.
             case "cancel", "cancle" -> handleCancelAll(player);
+
+            // V6.2: player-preference namespace.  "/wtb settings X" mirrors
+            // "/wtb X" for every player command, and hosts preference commands
+            // like "mute" (which also works at the top level for muscle memory).
+            case "settings" -> handleSettings(player, sender, command, label, args);
+            case "mute"     -> handleMute(player, Arrays.copyOfRange(args, 1, args.length));
 
             // Direct listing syntax:
             //   /wtb <material> <qty> <price> [enchant] [level]
@@ -231,6 +238,68 @@ public class WTBCommand implements CommandExecutor {
         // in-flight fulfilment (see ListingService.cancelAllListings docs).
         Main.getListingService().cancelAllListings(player);
         return true;
+    }
+
+    // ── /wtb settings … (V6.2) ────────────────────────────────────────────────
+
+    /**
+     * "/wtb settings" alone shows the player's current preferences.  With
+     * arguments it behaves exactly like "/wtb <args…>" — a discoverable home
+     * for every player command ("/wtb settings claim" == "/wtb claim").
+     * Admin commands stay permission-gated in handleAdmin and are never
+     * advertised here or in the settings tab completion.
+     */
+    private boolean handleSettings(Player player, CommandSender sender,
+                                   Command command, String label, String[] args) {
+        if (args.length == 1) {
+            player.sendMessage(Main.msg("settings_header"));
+            sendMuteStatus(player, "mute_status");
+            return true;
+        }
+        return onCommand(sender, command, label,
+                Arrays.copyOfRange(args, 1, args.length));
+    }
+
+    // ── /wtb [settings] mute <full|partial|all|off> (V6.2) ───────────────────
+
+    private boolean handleMute(Player player, String[] rest) {
+        var  prefs = Main.getPlayerSettingsService();
+        UUID uuid  = player.getUniqueId();
+
+        if (rest.length == 0) {
+            sendMuteStatus(player, "mute_status");
+            player.sendMessage(Main.msg("mute_usage"));
+            return true;
+        }
+
+        switch (rest[0].toLowerCase(Locale.ROOT)) {
+            // full / partial toggle just that popup; all / off set both.
+            case "full"    -> prefs.setSetting(uuid, PlayerSettingsService.MUTE_FULL_POPUP,
+                                               !prefs.isPopupMuted(uuid, true));
+            case "partial" -> prefs.setSetting(uuid, PlayerSettingsService.MUTE_PARTIAL_POPUP,
+                                               !prefs.isPopupMuted(uuid, false));
+            case "all"     -> {
+                prefs.setSetting(uuid, PlayerSettingsService.MUTE_FULL_POPUP,    true);
+                prefs.setSetting(uuid, PlayerSettingsService.MUTE_PARTIAL_POPUP, true);
+            }
+            case "off"     -> {
+                prefs.setSetting(uuid, PlayerSettingsService.MUTE_FULL_POPUP,    false);
+                prefs.setSetting(uuid, PlayerSettingsService.MUTE_PARTIAL_POPUP, false);
+            }
+            default        -> { player.sendMessage(Main.msg("mute_usage")); return true; }
+        }
+        sendMuteStatus(player, "mute_updated");
+        return true;
+    }
+
+    private void sendMuteStatus(Player player, String msgKey) {
+        var  prefs = Main.getPlayerSettingsService();
+        UUID uuid  = player.getUniqueId();
+        player.sendMessage(Main.msg(msgKey)
+                .replace("{full}",    Main.msg(prefs.isPopupMuted(uuid, true)
+                        ? "mute_state_muted" : "mute_state_on"))
+                .replace("{partial}", Main.msg(prefs.isPopupMuted(uuid, false)
+                        ? "mute_state_muted" : "mute_state_on")));
     }
 
     // ── /wtb admin … ─────────────────────────────────────────────────────────

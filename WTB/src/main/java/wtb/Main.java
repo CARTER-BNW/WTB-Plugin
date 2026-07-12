@@ -54,6 +54,7 @@ public class Main extends JavaPlugin {
     private static volatile TransactionService  transactionService;
     private static volatile NotificationService notificationService;
     private static volatile CatalogService      catalogService;
+    private static volatile PlayerSettingsService playerSettingsService;
 
     // GUIs (written once in onEnable, never changed)
     private static volatile MainListingsGUI  mainGUI;
@@ -102,6 +103,7 @@ public class Main extends JavaPlugin {
         notificationService = new NotificationService();
         catalogService      = new CatalogService();
         catalogService.load(); // built-in registry entries + admin-registered items
+        playerSettingsService = new PlayerSettingsService();
 
         // GUIs (singletons)
         mainGUI         = new MainListingsGUI();
@@ -122,6 +124,10 @@ public class Main extends JavaPlugin {
         // Listeners
         getServer().getPluginManager().registerEvents(
                 new MarketplaceClickListener(), this);
+
+        // V6.2: players already online (plugin-manager reload) never fired a
+        // join event for us — load their preference rows now.
+        getServer().getOnlinePlayers().forEach(playerSettingsService::loadOnJoin);
 
         getLogger().info("WTB v" + getDescription().getVersion() + " enabled.");
     }
@@ -319,6 +325,7 @@ public class Main extends JavaPlugin {
     public static TransactionService  getTransactionService()  { return transactionService;  }
     public static NotificationService getNotificationService() { return notificationService; }
     public static CatalogService      getCatalogService()      { return catalogService;      }
+    public static PlayerSettingsService getPlayerSettingsService() { return playerSettingsService; }
 
     public static MainListingsGUI  getMainGUI()          { return mainGUI;         }
     public static MyListingsGUI    getMyListingsGUI()    { return myListingsGUI;   }
