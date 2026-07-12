@@ -1,5 +1,28 @@
 # WTB Changelog
 
+## v6.1.1 — 2026-07-11
+
+### ✨ New
+
+- **Mutable order-filled popup** (`ListingService`, `settings.yml`) — the full-screen
+  "Buy Order Filled!" title shown to buyers can now be muted, separately for partial and
+  full fills, via two new settings (both default `true`, reloadable with `/wtbreload`):
+
+  ```yaml
+  settings:
+    notifications:
+      popup-on-full-fill: true
+      popup-on-partial-fill: true
+  ```
+
+  Muting hides only the title popup — the chat message, pickup sound, offline
+  notifications, and Claim Box delivery are unchanged. Servers upgrading keep the old
+  behaviour automatically (missing keys resolve to `true` from the jar's bundled defaults).
+
+No database changes — drop-in replacement for v6.1.0.
+
+---
+
 ## v6.1.0 — 2026-07-11
 
 Hardening release: the v6 economy engine was put through a 20-player concurrent stress campaign on a live Paper 26.2 server — **~192,000 successful operations across three 45-second runs, with zero violations**: exact-cent money conservation (deposits == payouts + refunds + escrow, over ~$3M escrow per run), no oversell, no double-claims, no stuck money.

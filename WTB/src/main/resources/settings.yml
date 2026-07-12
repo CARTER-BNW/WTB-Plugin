@@ -16,6 +16,13 @@ settings:
   transactions:
     history-limit: 200
 
+  # V6.1.1: full-screen "Buy Order Filled!" title shown to the buyer the moment
+  # an order is filled. Set to false to mute the popup; the chat message, the
+  # pickup sound, and Claim Box delivery are unaffected. Reloadable via /wtbreload.
+  notifications:
+    popup-on-full-fill: true
+    popup-on-partial-fill: true
+
   blocked-materials:
     - AIR
     - BARRIER

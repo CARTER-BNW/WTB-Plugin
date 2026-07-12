@@ -142,6 +142,17 @@ The expiry task runs asynchronously and only queries listings that have already 
     history-limit: 200  # Maximum number of transactions shown in the /wtb tx GUI
 ```
 
+#### Notification Settings
+
+```yaml
+  notifications:
+    popup-on-full-fill: true     # v6.1.1: full-screen "Buy Order Filled!" title when an
+                                 # order is completely filled. false = mute the popup.
+    popup-on-partial-fill: true  # v6.1.1: same popup for partial fills. false = mute.
+```
+
+Muting a popup only hides the full-screen title. The buyer still receives the chat message, the pickup sound, and their items in the Claim Box. Both keys are reloadable with `/wtbreload`, and servers upgrading from older versions get `true` automatically from the jar's bundled defaults.
+
 #### Blocked Materials
 
 ```yaml

@@ -579,11 +579,16 @@ public class ListingService {
                         if (b != null && b.isOnline()) {
                             b.playSound(b.getLocation(),
                                     org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1f, 1f);
-                            b.sendTitle(
-                                    Main.msg("order_filled_title"),
-                                    Main.msg("order_filled_subtitle")
-                                            .replace("{seller}", fSellerName),
-                                    10, 60, 10);
+                            boolean popup = Main.getSettings().getBoolean(fullyFilled
+                                    ? "settings.notifications.popup-on-full-fill"
+                                    : "settings.notifications.popup-on-partial-fill", true);
+                            if (popup) {
+                                b.sendTitle(
+                                        Main.msg("order_filled_title"),
+                                        Main.msg("order_filled_subtitle")
+                                                .replace("{seller}", fSellerName),
+                                        10, 60, 10);
+                            }
                             b.sendMessage(buyerMsg);
                             b.sendMessage(Main.msg("collect_items"));
                         } else {
