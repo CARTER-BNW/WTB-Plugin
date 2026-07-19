@@ -2,7 +2,7 @@
 
 Updated: 2026-07-20 (Claude session)
 
-## Current: v6.4.0 QoL + stress suite — awaiting PR merge
+## Released: v6.4.0 QoL + stress suite (2026-07-20)
 
 - dashv's three QoL asks implemented: sort toggle (Newest/Item Type),
   shift-click "claim all of this type", better paging (stay on page, clamp,
@@ -12,7 +12,7 @@ Updated: 2026-07-20 (Claude session)
   Timings: 1000-row TYPE sort render 130 ms; 1000-entry Claim All 3.7 s
   (tick-spread, no freeze).
 - Jar: `WTB/target/WTB-6.4.0.jar`. Drop-in for 6.3.0, no DB/config changes.
-- Next: merge the v6.4.0 PR, tag + release V6.4, deploy to sky-mc.net.
+- Released: https://github.com/CARTER-BNW/WTB-Plugin/releases/tag/V6.4 - deploy WTB-6.4.0.jar to sky-mc.net.
 
 ## Shipped earlier: v6.3.0 dupe fix
 
