@@ -12,7 +12,7 @@ Updated: 2026-07-20 (Claude session)
   Timings: 1000-row TYPE sort render 130 ms; 1000-entry Claim All 3.7 s
   (tick-spread, no freeze).
 - Jar: `WTB/target/WTB-6.4.0.jar`. Drop-in for 6.3.0, no DB/config changes.
-- Released: https://github.com/CARTER-BNW/WTB-Plugin/releases/tag/V6.4 - deploy WTB-6.4.0.jar to sky-mc.net.
+- Released V6.4 and V6.4.1 (help rewrite, admin cmds hidden, xJBACx credit). Deploy WTB-6.4.1.jar to sky-mc.net: https://github.com/CARTER-BNW/WTB-Plugin/releases/tag/V6.4.1
 
 ## Shipped earlier: v6.3.0 dupe fix
 
