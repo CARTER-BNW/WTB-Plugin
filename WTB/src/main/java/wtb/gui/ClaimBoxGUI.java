@@ -11,6 +11,8 @@ import wtb.models.ClaimEntry;
 import wtb.models.ClaimType;
 import wtb.utils.Format;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,10 +25,23 @@ public class ClaimBoxGUI {
     private static final String TITLE         = "§6Claim Box";
 
     private static final int SLOT_BACK    = 45;
+    private static final int SLOT_SORT    = 47;
     private static final int SLOT_REFRESH = 49;
 
+    /** Entries shown per page (slots 0-44; the bottom row is buttons). */
+    private static final int PAGE_SIZE = 45;
+
+    /**
+     * V6.4.0: per-player claim box ordering.
+     * NEWEST = DB order (created_at DESC, id DESC).
+     * TYPE   = money first, then refunds, then items A-Z by material,
+     *          newest first within a material.
+     */
+    public enum ClaimSort { NEWEST, TYPE }
+
     // Main-thread-only maps
-    private final Map<UUID, Integer> playerPages = new HashMap<>();
+    private final Map<UUID, Integer>   playerPages = new HashMap<>();
+    private final Map<UUID, ClaimSort> playerSorts = new HashMap<>();
 
     // ── Open ─────────────────────────────────────────────────────────────────
 
@@ -44,20 +59,42 @@ public class ClaimBoxGUI {
         return playerPages.getOrDefault(player.getUniqueId(), 0);
     }
 
-    /** Remove per-player page state on disconnect. */
+    /** Current sort mode for this player (defaults to NEWEST). Main thread only. */
+    public ClaimSort getSort(Player player) {
+        return playerSorts.getOrDefault(player.getUniqueId(), ClaimSort.NEWEST);
+    }
+
+    /** Flips NEWEST &lt;-&gt; TYPE and returns the new mode. Main thread only. */
+    public ClaimSort toggleSort(Player player) {
+        ClaimSort next = getSort(player) == ClaimSort.NEWEST ? ClaimSort.TYPE : ClaimSort.NEWEST;
+        playerSorts.put(player.getUniqueId(), next);
+        return next;
+    }
+
+    /** Remove per-player page/sort state on disconnect. */
     public void cleanupPlayer(UUID uuid) {
         playerPages.remove(uuid);
+        playerSorts.remove(uuid);
     }
 
     // ── Render ────────────────────────────────────────────────────────────────
 
     private void render(Player player, int page, List<ClaimEntry> claims) {
+        ClaimSort sort = getSort(player);
+        if (sort == ClaimSort.TYPE) claims = sortedByType(claims);
+
+        // V6.4.0: clamp the page so a box that shrank since the last render
+        // (claims succeeded, another session claimed) can never show an empty
+        // page past the end.
+        int maxPage = Math.max(0, (claims.size() - 1) / PAGE_SIZE);
+        page = Math.max(0, Math.min(page, maxPage));
+
         WtbGuiHolder holder = new WtbGuiHolder(WtbGuiHolder.Type.CLAIM_BOX);
         Inventory inv = Bukkit.createInventory(holder, GUI_SIZE, TITLE);
         holder.setInventory(inv);
 
-        int start = Math.max(0, page * 45);
-        int end   = Math.min(start + 45, claims.size());
+        int start = page * PAGE_SIZE;
+        int end   = Math.min(start + PAGE_SIZE, claims.size());
 
         for (int i = start; i < end; i++) {
             ItemStack claimItem = createClaimItem(claims.get(i));
@@ -66,9 +103,14 @@ public class ClaimBoxGUI {
 
         playerPages.put(player.getUniqueId(), page);
 
-        inv.setItem(SLOT_BACK,      button(Material.ARROW,    "§aBack"));
-        inv.setItem(SLOT_REFRESH,   button(Material.SUNFLOWER, "§eRefresh"));
-        inv.setItem(SLOT_CLAIM_ALL, button(Material.HOPPER,   "§aClaim All"));
+        inv.setItem(SLOT_BACK, button(Material.ARROW, "§aBack"));
+        inv.setItem(SLOT_SORT, button(Material.COMPARATOR,
+                "§eSort: " + (sort == ClaimSort.TYPE ? "§bItem Type" : "§aNewest First"),
+                List.of("§7Click to toggle")));
+        inv.setItem(SLOT_REFRESH, button(Material.SUNFLOWER, "§eRefresh",
+                List.of("§7Page " + (page + 1) + " of " + (maxPage + 1),
+                        "§7" + claims.size() + " claim(s) waiting")));
+        inv.setItem(SLOT_CLAIM_ALL, button(Material.HOPPER, "§aClaim All"));
 
         if (page > 0)
             inv.setItem(48, button(Material.ARROW, "§aPrevious Page"));
@@ -79,6 +121,41 @@ public class ClaimBoxGUI {
         // don't hijack it (V6.2.1).
         if (!player.isOnline() || !WtbGuiHolder.mayOpenFor(player)) return;
         player.openInventory(inv);
+    }
+
+    // ── Sorting ───────────────────────────────────────────────────────────────
+
+    /** Sort key computed ONCE per entry — getItem() clones the stack, so
+     *  comparing entries directly would clone O(n log n) times on big boxes. */
+    private record SortKey(int typeOrder, String material, long createdAt, int id,
+                           ClaimEntry entry) {}
+
+    /**
+     * TYPE mode: money first, then refunds, then items grouped A-Z by material
+     * (corrupt item rows last), newest first within a group.
+     */
+    private static List<ClaimEntry> sortedByType(List<ClaimEntry> claims) {
+        List<SortKey> keys = new ArrayList<>(claims.size());
+        for (ClaimEntry e : claims) {
+            int order; String mat;
+            switch (e.getType()) {
+                case MONEY  -> { order = 0; mat = ""; }
+                case REFUND -> { order = 1; mat = ""; }
+                default     -> {
+                    ItemStack it = e.getItem();
+                    order = 2;
+                    mat   = it == null ? "￿" : it.getType().name(); // corrupt last
+                }
+            }
+            keys.add(new SortKey(order, mat, e.getCreatedAt(), e.getId(), e));
+        }
+        keys.sort(Comparator.comparingInt(SortKey::typeOrder)
+                .thenComparing(SortKey::material)
+                .thenComparing(Comparator.comparingLong(SortKey::createdAt).reversed())
+                .thenComparing(Comparator.comparingInt(SortKey::id).reversed()));
+        List<ClaimEntry> out = new ArrayList<>(keys.size());
+        for (SortKey k : keys) out.add(k.entry());
+        return out;
     }
 
     // ── Item builder ──────────────────────────────────────────────────────────
@@ -145,7 +222,8 @@ public class ClaimBoxGUI {
                             "§7Item Reward",
                             "§8Entry ID: " + entry.getId(),
                             "",
-                            "§eClick to claim"
+                            "§eClick to claim",
+                            "§eShift-click: claim all of this type"
                     ));
                     fallback.setItemMeta(fMeta);
                     yield fallback;
@@ -154,7 +232,8 @@ public class ClaimBoxGUI {
                         "§7Item Reward",
                         "§8Entry ID: " + entry.getId(),
                         "",
-                        "§eClick to claim"
+                        "§eClick to claim",
+                        "§eShift-click: claim all of this type"
                 ));
                 stored.setItemMeta(meta);
                 yield stored;
@@ -164,9 +243,14 @@ public class ClaimBoxGUI {
     }
 
     private ItemStack button(Material mat, String name) {
+        return button(mat, name, null);
+    }
+
+    private ItemStack button(Material mat, String name, List<String> lore) {
         ItemStack item = new ItemStack(mat);
         ItemMeta  meta = item.getItemMeta();
         meta.setDisplayName(name);
+        if (lore != null) meta.setLore(lore);
         item.setItemMeta(meta);
         return item;
     }

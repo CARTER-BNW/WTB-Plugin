@@ -1,5 +1,48 @@
 # WTB Changelog
 
+## v6.4.0 — 2026-07-20
+
+Claim Box quality-of-life release — the three improvements requested alongside
+the v6.3.0 dupe report — plus deposit hardening. Validated by a 12-scenario
+stress suite on a test server (see release notes).
+
+### ✨ New
+
+- **Sort toggle** (`ClaimBoxGUI`) — new comparator button (slot 47) switches the
+  Claim Box between **Newest First** (default, unchanged) and **Item Type**:
+  money first, then refunds, then items grouped A-Z by material, newest first
+  within a material. Per-player, remembered while online, main-thread only.
+- **Claim All of this type** (`MarketplaceClickListener`) — **shift-click** any
+  item entry to claim every entry of that material across ALL pages. Runs
+  through the same tick-spread batch as Claim All, so the v6.3.0 inventory-full
+  stop and dupe protections apply identically. The material is resolved from
+  the database entry (not the icon), so corrupt-item placeholder icons behave
+  sanely; shift-clicking a money/refund entry just claims that one entry. New
+  summary messages `claim_type_success` / `claim_type_partial` (bundled
+  defaults cover upgraded servers).
+- **Better paging** (`ClaimBoxGUI`, `MarketplaceClickListener`) —
+  - claiming (single, Claim All, or type claim) now re-renders the page you
+    were on instead of jumping back to page 1;
+  - the page is clamped when the box shrinks, so you can never land on an
+    empty page past the end;
+  - the Refresh button now shows *"Page X of Y"* and the total waiting count.
+
+### 🐛 Fixes / hardening
+
+- **Deposit-throw money loss** (`ClaimBoxService`) — the claim row is deleted
+  before the Vault deposit, so an economy plugin that *throws* (rather than
+  returning a failure response) would have destroyed the money with no
+  requeue. A throwing deposit is now treated as a failed deposit: the entry is
+  re-queued and the player keeps their claim.
+- **Stable claim ordering** (`ClaimBoxDAO`) — rows inserted in the same
+  millisecond now tiebreak on `id DESC`, so the box no longer reshuffles
+  same-timestamp entries between renders.
+
+No database changes, no config changes — drop-in replacement for v6.3.0
+(new message keys resolve from the jar's bundled defaults).
+
+---
+
 ## v6.3.0 — 2026-07-19
 
 Critical bug-fix release. **All servers should upgrade immediately.**

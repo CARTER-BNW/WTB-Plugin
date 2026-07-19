@@ -97,7 +97,8 @@ public class MarketplaceClickListener implements Listener {
         switch (holder.getType()) {
             case MAIN         -> handleMainGUI(player, clicked, e.getSlot());
             case MY_LISTINGS  -> handleMyListingsGUI(player, clicked, e.getSlot());
-            case CLAIM_BOX    -> handleClaimBoxGUI(player, clicked, e.getSlot());
+            case CLAIM_BOX    -> handleClaimBoxGUI(player, clicked, e.getSlot(),
+                                                   e.getClick().isShiftClick());
             case TRANSACTIONS -> handleTransactionsGUI(player, clicked, e.getSlot());
             case CONFIRM      -> Main.getConfirmSaleGUI().handleClick(player, e.getSlot());
         }
@@ -307,7 +308,7 @@ public class MarketplaceClickListener implements Listener {
 
     // ── Claim Box GUI ─────────────────────────────────────────────────────────
 
-    private void handleClaimBoxGUI(Player player, ItemStack clicked, int slot) {
+    private void handleClaimBoxGUI(Player player, ItemStack clicked, int slot, boolean shift) {
         ClaimBoxGUI claimBoxGUI = Main.getClaimBoxGUI();
 
         if (slot == 45) {
@@ -315,9 +316,17 @@ public class MarketplaceClickListener implements Listener {
                     () -> Main.getMainGUI().openAsync(player, 0));
             return;
         }
+        if (slot == 47) {
+            // V6.4.0: toggle Newest <-> Item Type sort, re-render current page.
+            Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
+                claimBoxGUI.toggleSort(player);
+                claimBoxGUI.open(player, claimBoxGUI.getPage(player));
+            });
+            return;
+        }
         if (slot == 49) {
             Bukkit.getScheduler().runTask(Main.getInstance(),
-                    () -> claimBoxGUI.open(player, 0));
+                    () -> claimBoxGUI.open(player, claimBoxGUI.getPage(player)));
             return;
         }
         if (slot == 48) {
@@ -356,15 +365,23 @@ public class MarketplaceClickListener implements Listener {
                 // grant on the main thread), so correctness is unchanged.
                 Deque<ClaimEntry> queue = new ArrayDeque<>(entries);
                 Bukkit.getScheduler().runTask(Main.getInstance(),
-                        () -> processClaimBatch(player, claimBoxGUI, queue, new int[3]));
+                        () -> processClaimBatch(player, claimBoxGUI, queue, new int[3], null));
             });
             return;
         }
 
-        // Individual claim (slot < 45)
+        // Claim-all-of-type / individual claim (slot < 45)
         if (slot < 45) {
             int clickedId = extractEntryId(clicked);
             if (clickedId == -1) return;
+
+            if (shift) {
+                // V6.4.0: shift-click claims every entry of the clicked item's
+                // material.  The material is resolved from the DB ENTRY, not
+                // the icon, so BARRIER placeholders (no-meta fallback) work too.
+                claimAllOfType(player, claimBoxGUI, clickedId);
+                return;
+            }
 
             if (!CLAIMING.add(clickedId)) return; // duplicate-click guard
 
@@ -392,13 +409,76 @@ public class MarketplaceClickListener implements Listener {
                 Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
                     try {
                         Main.getClaimBoxService().claim(player, finalEntry);
-                        claimBoxGUI.open(player, 0);
+                        // V6.4.0: stay on the page the player was viewing
+                        // (render clamps if the box shrank) — reopening page 0
+                        // made claiming from later pages miserable.
+                        claimBoxGUI.open(player, claimBoxGUI.getPage(player));
                     } finally {
                         CLAIMING.remove(clickedId);
                     }
                 });
             });
         }
+    }
+
+    /**
+     * V6.4.0: "Claim All of this type" — shift-click on an item entry claims
+     * every ITEM entry of the same material, across ALL pages.  Shares the
+     * CLAIMING_ALL lock and tick-spread batch with Claim All, so the
+     * inventory-full stop and dupe protections apply identically.  Shift-click
+     * on a money/refund/corrupt entry falls back to a normal single claim.
+     */
+    private void claimAllOfType(Player player, ClaimBoxGUI claimBoxGUI, int clickedId) {
+        if (!CLAIMING_ALL.add(player.getUniqueId())) return;
+
+        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
+            List<ClaimEntry> entries;
+            try {
+                entries = Main.getClaimBoxService().getClaims(player.getUniqueId());
+            } catch (Exception ex) {
+                ex.printStackTrace();
+                CLAIMING_ALL.remove(player.getUniqueId());
+                return;
+            }
+
+            ClaimEntry clickedEntry = entries.stream()
+                    .filter(en -> en.getId() == clickedId)
+                    .findFirst().orElse(null);
+            if (clickedEntry == null) { // already claimed elsewhere — just re-render
+                Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
+                    try {
+                        claimBoxGUI.open(player, claimBoxGUI.getPage(player));
+                    } finally {
+                        CLAIMING_ALL.remove(player.getUniqueId());
+                    }
+                });
+                return;
+            }
+
+            ItemStack clickedItem = clickedEntry.getItem();
+            if (clickedEntry.getType() != ClaimType.ITEM || clickedItem == null) {
+                // Money, refund, or corrupt row: type-claim doesn't apply.
+                Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
+                    try {
+                        Main.getClaimBoxService().claim(player, clickedEntry);
+                        claimBoxGUI.open(player, claimBoxGUI.getPage(player));
+                    } finally {
+                        CLAIMING_ALL.remove(player.getUniqueId());
+                    }
+                });
+                return;
+            }
+
+            Material mat = clickedItem.getType();
+            Deque<ClaimEntry> queue = new ArrayDeque<>();
+            for (ClaimEntry en : entries) {
+                if (en.getType() != ClaimType.ITEM) continue;
+                ItemStack it = en.getItem();
+                if (it != null && it.getType() == mat) queue.add(en);
+            }
+            Bukkit.getScheduler().runTask(Main.getInstance(),
+                    () -> processClaimBatch(player, claimBoxGUI, queue, new int[3], mat.name()));
+        });
     }
 
     /** Max claim entries processed per tick during Claim All (audit fix #10). */
@@ -409,9 +489,14 @@ public class MarketplaceClickListener implements Listener {
      * re-schedules itself for the next tick until the queue is empty (or the
      * player leaves).  counters[0] = succeeded, counters[1] = failed,
      * counters[2] = 1 once the inventory came back full.
+     *
+     * @param typeLabel material name when this batch is a "claim all of this
+     *                  type" run (used in the summary message); null for a
+     *                  full Claim All.
      */
     private void processClaimBatch(Player player, ClaimBoxGUI claimBoxGUI,
-                                   Deque<ClaimEntry> queue, int[] counters) {
+                                   Deque<ClaimEntry> queue, int[] counters,
+                                   String typeLabel) {
         try {
             int done = 0;
             while (!queue.isEmpty() && done < CLAIMS_PER_TICK) {
@@ -445,19 +530,25 @@ public class MarketplaceClickListener implements Listener {
 
             if (!queue.isEmpty() && player.isOnline()) {
                 Bukkit.getScheduler().runTaskLater(Main.getInstance(),
-                        () -> processClaimBatch(player, claimBoxGUI, queue, counters), 1L);
+                        () -> processClaimBatch(player, claimBoxGUI, queue, counters, typeLabel), 1L);
                 return; // lock stays held until the chain finishes
             }
 
             if (player.isOnline()) {
-                claimBoxGUI.open(player, 0);
+                // V6.4.0: re-render the page the player was on (clamped in
+                // render if the box shrank) instead of jumping back to page 0.
+                claimBoxGUI.open(player, claimBoxGUI.getPage(player));
                 if (counters[1] == 0) {
-                    player.sendMessage(Main.msg("claim_all_success")
-                            .replace("{count}", String.valueOf(counters[0])));
+                    player.sendMessage(Main.msg(typeLabel == null
+                                    ? "claim_all_success" : "claim_type_success")
+                            .replace("{count}",    String.valueOf(counters[0]))
+                            .replace("{material}", String.valueOf(typeLabel)));
                 } else {
-                    player.sendMessage(Main.msg("claim_all_partial")
-                            .replace("{count}",  String.valueOf(counters[0]))
-                            .replace("{failed}", String.valueOf(counters[1])));
+                    player.sendMessage(Main.msg(typeLabel == null
+                                    ? "claim_all_partial" : "claim_type_partial")
+                            .replace("{count}",    String.valueOf(counters[0]))
+                            .replace("{failed}",   String.valueOf(counters[1]))
+                            .replace("{material}", String.valueOf(typeLabel)));
                 }
             }
             CLAIMING_ALL.remove(player.getUniqueId());

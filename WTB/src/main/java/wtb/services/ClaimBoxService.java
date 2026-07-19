@@ -169,8 +169,8 @@ public class ClaimBoxService {
         switch (entry.getType()) {
 
             case MONEY -> {
-                EconomyResponse resp = Main.getEconomy().depositPlayer(player, entry.getMoney());
-                if (!resp.transactionSuccess()) {
+                EconomyResponse resp = deposit(player, entry.getMoney());
+                if (resp == null || !resp.transactionSuccess()) {
                     requeue(entry, player.getName());
                     if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
                     return ClaimResult.FAILED;
@@ -182,8 +182,8 @@ public class ClaimBoxService {
             }
 
             case REFUND -> {
-                EconomyResponse resp = Main.getEconomy().depositPlayer(player, entry.getMoney());
-                if (!resp.transactionSuccess()) {
+                EconomyResponse resp = deposit(player, entry.getMoney());
+                if (resp == null || !resp.transactionSuccess()) {
                     requeue(entry, player.getName());
                     if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
                     return ClaimResult.FAILED;
@@ -249,6 +249,22 @@ public class ClaimBoxService {
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /**
+     * V6.4.0 hardening: the claim row is deleted BEFORE the deposit, so an
+     * economy plugin that THROWS (instead of returning a failure response)
+     * would destroy the money with no requeue.  Treat a throw as a failed
+     * deposit; the caller requeues.
+     */
+    private EconomyResponse deposit(Player player, double amount) {
+        try {
+            return Main.getEconomy().depositPlayer(player, amount);
+        } catch (RuntimeException ex) {
+            LOG.severe("[WTB] Economy deposit threw for " + player.getName()
+                    + " (amount=" + amount + "): " + ex);
+            return null;
+        }
+    }
 
     /**
      * Re-inserts a claim entry after a failed reward attempt (inventory full,
