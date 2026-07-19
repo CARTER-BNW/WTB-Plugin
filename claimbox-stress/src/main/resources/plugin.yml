@@ -1,0 +1,6 @@
+name: ClaimStressProbe
+version: 1.0.0
+main: probe.ClaimStressProbe
+api-version: '1.21'
+depend:
+  - WTB

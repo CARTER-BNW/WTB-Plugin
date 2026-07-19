@@ -143,6 +143,8 @@ messages:
   claim_item_corrupt: "&cThis item entry is corrupt and has been dismissed."
   claim_all_success: "&aClaimed &e{count}&a item(s) from your Claim Box!"
   claim_all_partial: "&aClaimed &e{count}&a item(s). &c{failed} could not be claimed (inventory full?)."
+  claim_type_success: "&aClaimed &e{count}&a stack(s) of &e{material}&a from your Claim Box!"
+  claim_type_partial: "&aClaimed &e{count}&a stack(s) of &e{material}&a. &c{failed} could not be claimed (inventory full?)."
 
   # -- Fill All ---------------------------------------------------------------------
   fill_all_success: "&aFilling &e{count}&a open listing(s)..."

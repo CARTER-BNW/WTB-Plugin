@@ -100,7 +100,9 @@ public class ClaimBoxDAO {
     // ── Read operations ──────────────────────────────────────────────────────
 
     public List<ClaimEntry> get(UUID player) {
-        String sql = "SELECT * FROM claim_box WHERE player=? ORDER BY created_at DESC";
+        // id DESC tiebreak (V6.4.0): rapid inserts share a created_at millis,
+        // which left same-timestamp rows in arbitrary order between renders.
+        String sql = "SELECT * FROM claim_box WHERE player=? ORDER BY created_at DESC, id DESC";
         List<ClaimEntry> list = new ArrayList<>();
 
         try (var conn = DatabaseManager.get().getConnection();
