@@ -56,7 +56,7 @@ public class WTBCommand implements CommandExecutor {
             case "my"     -> { Main.getMyListingsGUI().open(player, 0); yield true; }
             case "claim"  -> { Main.getClaimBoxGUI().open(player, 0);  yield true; }
             case "tx"     -> { Main.getTransactionsGUI().open(player, 0); yield true; }
-            case "help"   -> { player.sendMessage(Main.msg("help_message")); yield true; }
+            case "help"   -> { sendHelp(player); yield true; }
             case "admin"  -> handleAdmin(player, args);
 
             // V6: fill everything you can, via the confirmation screen.
@@ -78,6 +78,24 @@ public class WTBCommand implements CommandExecutor {
             //   /wtb <catalog-key> <qty> <price>          (potions, horns, god items, …)
             default       -> handleCreate(player, args);
         };
+    }
+
+    // ── /wtb help ─────────────────────────────────────────────────────────────
+
+    /**
+     * V6.4.1: player help lists every player command (the legacy "/wtb buy"
+     * alias is deliberately omitted); the admin section is appended ONLY for
+     * players with wtb.admin, so regular players never see admin commands.
+     * Also used by the main GUI's Help button.
+     */
+    public static void sendHelp(Player player) {
+        // help_message_player, NOT the pre-6.4.1 help_message: the old key
+        // lives on in upgraded servers' settings.yml and would shadow the
+        // bundled default (see the note in settings.yml).
+        player.sendMessage(Main.msg("help_message_player"));
+        if (Main.hasAdminPermission(player)) {
+            player.sendMessage(Main.msg("help_message_admin"));
+        }
     }
 
     // ── /wtb <item> <quantity> <price> [enchant] [level] ─────────────────────

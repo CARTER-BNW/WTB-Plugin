@@ -88,7 +88,11 @@ public class MainListingsGUI {
         if (end < listings.size())
             inv.setItem(SLOT_NEXT,     button(Material.ARROW,          "§aNext Page"));
         inv.setItem(SLOT_TRANSACTIONS, button(Material.PAPER,          "§fTransactions"));
-        inv.setItem(SLOT_HELP,         button(Material.WRITABLE_BOOK,  "§aHelp"));
+        ItemStack help = button(Material.WRITABLE_BOOK, "§aHelp");
+        ItemMeta helpMeta = help.getItemMeta();
+        helpMeta.setLore(List.of("§7All WTB commands", "§8Made by xJBACx"));
+        help.setItemMeta(helpMeta);
+        inv.setItem(SLOT_HELP, help);
         if (Main.getSettings().getBoolean("settings.listing.fill-all-enabled", true))
             inv.setItem(SLOT_FILL_ALL, button(Material.HOPPER,         "§aFill All Open"));
 

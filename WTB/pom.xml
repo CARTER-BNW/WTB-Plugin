@@ -7,7 +7,7 @@
 
     <groupId>wtb</groupId>
     <artifactId>WTB</artifactId>
-    <version>6.4.0</version>
+    <version>6.4.1</version>
     <packaging>jar</packaging>
 
     <name>WTB</name>
