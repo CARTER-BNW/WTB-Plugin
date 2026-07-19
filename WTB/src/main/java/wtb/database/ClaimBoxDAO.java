@@ -75,6 +75,19 @@ public class ClaimBoxDAO {
     }
 
     /**
+     * Deletes a claim entry on the CALLER's connection (inside the caller's
+     * transaction), reporting whether a row was removed.  V6.4.2: the claim
+     * flow deletes and re-queues in ONE transaction so a failure can never
+     * destroy the entry.
+     */
+    public boolean deleteInTx(Connection conn, int id) throws SQLException {
+        try (var stmt = conn.prepareStatement("DELETE FROM claim_box WHERE id=?")) {
+            stmt.setInt(1, id);
+            return stmt.executeUpdate() > 0;
+        }
+    }
+
+    /**
      * Deletes the claim entry with the given id and reports whether a row
      * was actually removed.
      *

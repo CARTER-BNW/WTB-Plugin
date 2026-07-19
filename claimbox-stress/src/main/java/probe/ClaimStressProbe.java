@@ -66,7 +66,8 @@ public class ClaimStressProbe extends JavaPlugin {
                     this::s9_paging_clamp_and_stay,
                     this::s10_races,
                     this::s11_volume_1000,
-                    this::s12_lock_released
+                    this::s12_lock_released,
+                    this::s13_db_contention
             ));
             next();
         });
@@ -605,6 +606,67 @@ public class ClaimStressProbe extends JavaPlugin {
         check(claimingAll.isEmpty(), "S12 CLAIMING_ALL empty after all scenarios ("
                 + claimingAll.size() + " leaked)");
         next();
+    }
+
+    /**
+     * S13 (V6.4.2): DB-contention torture.  200 claim transactions (mostly
+     * partial/full-inventory requeues — the delete+reinsert path that used to
+     * lose items) run on the main thread WHILE the DbExecutor floods the same
+     * SQLite file with 600 async inserts for another player.  The old async
+     * requeue lost rows in exactly this situation (~79k items on the live
+     * server).  Invariants: claimer conservation EXACT, every flood insert
+     * lands, no claim may vanish regardless of BUSY errors.
+     */
+    private void s13_db_contention() {
+        try {
+            getLogger().info("STRESS S13: 200 claim txs vs 600 concurrent async inserts");
+            FakePlayer p = new FakePlayer(this, "S13");
+            UUID flood  = UUID.nameUUIDFromBytes("stress-S13-flood".getBytes());
+
+            // 2 free slots + 1 partial stack -> grants, one partial, then skips
+            // would hide churn; drive claimDetailed DIRECTLY so all 200 entries
+            // run a full delete+requeue transaction.
+            fillSlots(p.backing, 0, 33, Material.DIRT, 64);
+            p.backing.setItem(33, new ItemStack(Material.GRANITE, 32));
+            for (int i = 0; i < 200; i++) seedItem(p.id, Material.GRANITE, 64);
+
+            Method mAddItemAsync = svc.getClass().getMethod("addItem", UUID.class, ItemStack.class);
+            List<?> entries = claims(p.id);
+            final int[] idx = {0}, floods = {0};
+            final long t0 = System.currentTimeMillis();
+
+            Bukkit.getScheduler().runTaskTimer(this, task -> {
+                try {
+                    // flood the executor every tick while claims run
+                    for (int i = 0; i < 60 && floods[0] < 600; i++, floods[0]++) {
+                        mAddItemAsync.invoke(svc, flood, new ItemStack(Material.MUD, 16));
+                    }
+                    for (int i = 0; i < 40 && idx[0] < entries.size(); i++, idx[0]++) {
+                        claimResult(p, entries.get(idx[0]));
+                    }
+                    if (idx[0] >= entries.size() && floods[0] >= 600) {
+                        task.cancel();
+                        // wait for the DbExecutor queue to drain
+                        await(() -> {
+                            try { return boxItems(flood, Material.MUD) >= 600 * 16; }
+                            catch (Exception e) { return false; }
+                        }, 40, () -> {
+                            try {
+                                getLogger().info("STRESS S13 timing: "
+                                        + (System.currentTimeMillis() - t0) + " ms");
+                                long delivered = invCount(p.backing, Material.GRANITE) - 32;
+                                long inBox     = boxItems(p.id, Material.GRANITE);
+                                checkEq(200 * 64, delivered + inBox,
+                                        "S13 CONSERVATION under DB contention");
+                                checkEq(600L * 16, boxItems(flood, Material.MUD),
+                                        "S13 all concurrent async inserts landed");
+                            } catch (Throwable t) { abort(t); return; }
+                            next();
+                        });
+                    }
+                } catch (Throwable t) { task.cancel(); abort(t); }
+            }, 1L, 1L);
+        } catch (Throwable t) { abort(t); }
     }
 
     // ── Fake player ──────────────────────────────────────────────────────────

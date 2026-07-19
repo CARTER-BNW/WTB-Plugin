@@ -1,5 +1,34 @@
 # WTB Changelog
 
+## v6.4.2 — 2026-07-20
+
+Critical hardening release: closes the claim-loss window found by auditing the
+live server's database (~79,000 items were silently destroyed over the v6.x
+era). **All servers should upgrade.**
+
+### 🐛 Fixes
+
+- **CRITICAL: claim re-queue could be lost — items destroyed**
+  (`ClaimBoxService`, `ClaimBoxDAO`) — claiming used to commit the row DELETE
+  immediately, then re-queue a failed/partial claim with an *asynchronous*
+  INSERT on the DbExecutor. If that insert failed (SQLITE_BUSY under Claim-All
+  churn), the server crashed, or the executor was already shutting down, the
+  entry was gone with only a console warning. Forensic reconciliation of a live
+  server (transactions vs claim logs vs claim box) measured ~79k items lost
+  this way. The claim is now ONE transaction on ONE connection: DELETE (still
+  the atomic double-claim guard) and any re-queue INSERT commit or roll back
+  together. On any DB error the row survives untouched, the delivered part of
+  the grant is automatically taken back, the player sees *"your claim is safe,
+  please try again"* (new `claim_failed_retry` message), and a `TX-FAIL` line
+  is written to the WTB file log (previously console-only).
+- Stress suite: new S13 contention scenario — 200 claim transactions racing
+  600 concurrent async inserts on the same SQLite file; conservation must be
+  exact and every insert must land.
+
+No database schema changes, no config changes — drop-in replacement for v6.4.x.
+
+---
+
 ## v6.4.1 — 2026-07-20
 
 Help polish.
