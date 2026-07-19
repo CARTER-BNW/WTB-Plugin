@@ -17,6 +17,7 @@ import wtb.commands.WTBCommand;
 import wtb.database.ListingDAO;
 import wtb.gui.*;
 import wtb.models.*;
+import wtb.services.ClaimBoxService;
 import wtb.utils.ItemMatcher;
 import wtb.utils.NameCache;
 
@@ -355,7 +356,7 @@ public class MarketplaceClickListener implements Listener {
                 // grant on the main thread), so correctness is unchanged.
                 Deque<ClaimEntry> queue = new ArrayDeque<>(entries);
                 Bukkit.getScheduler().runTask(Main.getInstance(),
-                        () -> processClaimBatch(player, claimBoxGUI, queue, new int[2]));
+                        () -> processClaimBatch(player, claimBoxGUI, queue, new int[3]));
             });
             return;
         }
@@ -406,7 +407,8 @@ public class MarketplaceClickListener implements Listener {
     /**
      * Processes up to {@link #CLAIMS_PER_TICK} claims on the main thread, then
      * re-schedules itself for the next tick until the queue is empty (or the
-     * player leaves).  counters[0] = succeeded, counters[1] = failed.
+     * player leaves).  counters[0] = succeeded, counters[1] = failed,
+     * counters[2] = 1 once the inventory came back full.
      */
     private void processClaimBatch(Player player, ClaimBoxGUI claimBoxGUI,
                                    Deque<ClaimEntry> queue, int[] counters) {
@@ -414,11 +416,30 @@ public class MarketplaceClickListener implements Listener {
             int done = 0;
             while (!queue.isEmpty() && done < CLAIMS_PER_TICK) {
                 ClaimEntry entry = queue.poll();
+
+                // V6.3.0 dupe fix: once the inventory is full, stop ATTEMPTING
+                // item claims.  The old code kept delete+re-inserting every
+                // remaining item row, and any partial fit (topping up existing
+                // stacks) duplicated the delivered part.  Skipped entries are
+                // left untouched in the DB and counted as "could not be
+                // claimed"; money/refund entries need no inventory space, so
+                // they still process.
+                if (counters[2] == 1 && entry.getType() == ClaimType.ITEM) {
+                    counters[1]++;
+                    continue;
+                }
+
                 // quiet=true (V6.2.1): per-entry chat lines flooded the screen
                 // on big boxes ("inventory full" once per stack) — the summary
                 // below covers the whole run in one message.
-                if (Main.getClaimBoxService().claim(player, entry, true)) counters[0]++;
-                else counters[1]++;
+                ClaimBoxService.ClaimResult result =
+                        Main.getClaimBoxService().claimDetailed(player, entry, true);
+                if (result == ClaimBoxService.ClaimResult.GRANTED) {
+                    counters[0]++;
+                } else {
+                    counters[1]++;
+                    if (result == ClaimBoxService.ClaimResult.INVENTORY_FULL) counters[2] = 1;
+                }
                 done++;
             }
 

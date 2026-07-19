@@ -1,5 +1,46 @@
 # WTB Changelog
 
+## v6.3.0 — 2026-07-19
+
+Critical bug-fix release. **All servers should upgrade immediately.**
+
+### 🐛 Fixes
+
+- **CRITICAL: Claim Box item duplication on partial inventory fit**
+  (`ClaimBoxService`) — when a claimed stack only *partially* fit into the
+  player's inventory (topping up existing stacks / one last slot),
+  `Inventory.addItem()` delivered the part that fit, but WTB re-queued the
+  **full original stack** to the Claim Box. The delivered portion then existed
+  in the player's inventory *and* in claim storage — item duplication, exactly
+  as reported by dashv. Reproduced end-to-end on a test server: a 64-item entry
+  claimed into an inventory with room for 20 produced 84 items (+20 duped).
+  WTB now re-queues **only the leftover amount** that did not fit; the fix was
+  verified with the same test (20 delivered + 44 re-queued = 64, no dupe).
+  This applies to Claim All *and* individual claim clicks.
+- **Claim All now stops attempting item claims once the inventory is full**
+  (`MarketplaceClickListener`) — previously every remaining stack was still
+  delete+re-inserted (hundreds of pointless DB writes per run on big boxes,
+  and each partial fit duplicated items, multiplying with every repeated
+  Claim All). Once the inventory reports full, remaining item entries are left
+  untouched in the database and counted in the *"Y could not be claimed"*
+  summary; money/refund entries still process since they need no inventory
+  space. A new `ClaimResult` outcome (`GRANTED` / `ALREADY_CLAIMED` /
+  `INVENTORY_FULL` / `FAILED`) carries the reason; the boolean `claim()` API
+  is unchanged for existing callers.
+- **Wrong amount in claim chat message** (`ClaimBoxService`) — `addItem()`
+  mutates the stack passed to it, so the *"You claimed Xx MATERIAL"* message
+  could under-report the amount when the stack was spread across several
+  existing part-stacks. The message now always shows the requested amount.
+
+No database changes, no config changes — drop-in replacement for v6.2.x.
+
+### 📋 Noted for a future release (from the same report)
+
+- Sort Claim Box by item type, "Claim All of this type", and better claiming
+  from later pages with very large boxes (200+ stacks).
+
+---
+
 ## v6.2.1 — 2026-07-12
 
 Bug-fix release for two player-reported issues.

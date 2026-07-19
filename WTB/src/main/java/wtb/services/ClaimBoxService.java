@@ -90,6 +90,22 @@ public class ClaimBoxService {
     // ── Claim (must run on the main thread) ───────────────────────────────────
 
     /**
+     * Detailed outcome of a {@link #claimDetailed} call.  Claim All needs to
+     * distinguish "inventory full" from other failures so it can stop
+     * attempting further item claims (V6.3.0 dupe fix).
+     */
+    public enum ClaimResult {
+        /** Reward fully delivered (or corrupt entry dismissed). */
+        GRANTED,
+        /** Row already deleted by a concurrent claim — nothing happened. */
+        ALREADY_CLAIMED,
+        /** No (or not enough) inventory space; the undelivered part was re-queued. */
+        INVENTORY_FULL,
+        /** Off-thread call, offline player, or economy deposit failure. */
+        FAILED
+    }
+
+    /**
      * Processes a single claim entry, granting the reward to {@code player}.
      *
      * <p><b>Must be called on the main thread</b> — Vault deposits and inventory
@@ -120,24 +136,34 @@ public class ClaimBoxService {
      * file logging are identical in both modes.
      */
     public boolean claim(Player player, ClaimEntry entry, boolean quiet) {
+        return claimDetailed(player, entry, quiet) == ClaimResult.GRANTED;
+    }
+
+    /**
+     * As {@link #claim(Player, ClaimEntry, boolean)} but reports WHY a claim
+     * did not succeed, so batch callers can react (stop attempting item claims
+     * once the inventory is full instead of churning delete+re-insert on every
+     * remaining row).
+     */
+    public ClaimResult claimDetailed(Player player, ClaimEntry entry, boolean quiet) {
 
         // Bug #7 fix: refuse to run off the main thread — Vault/inventory APIs are not
         // thread-safe, and silent corruption is worse than a logged refusal.
         if (!Bukkit.isPrimaryThread()) {
             LOG.warning("[WTB] ClaimBoxService.claim() was called off the main thread — aborting.");
-            return false;
+            return ClaimResult.FAILED;
         }
 
         // Bug #6 fix: don't attempt to give rewards to a disconnected player.
         // Without this check, addItem() silently discards items into an offline
         // inventory that gets thrown away on disconnect.
-        if (!player.isOnline()) return false;
+        if (!player.isOnline()) return ClaimResult.FAILED;
 
         // Bug #2 fix: atomically claim ownership via a synchronous DELETE.
         // executeUpdate() returns the number of rows affected; 0 means the entry
         // was already deleted by a previous claim() call — abort with no effect.
         if (!dao.deleteIfExists(entry.getId())) {
-            return false; // already claimed
+            return ClaimResult.ALREADY_CLAIMED;
         }
 
         switch (entry.getType()) {
@@ -147,7 +173,7 @@ public class ClaimBoxService {
                 if (!resp.transactionSuccess()) {
                     requeue(entry, player.getName());
                     if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
-                    return false;
+                    return ClaimResult.FAILED;
                 }
                 String fmt = Format.money(entry.getMoney());
                 if (!quiet) player.sendMessage(Main.msg("claim_money").replace("{amount}", fmt));
@@ -160,7 +186,7 @@ public class ClaimBoxService {
                 if (!resp.transactionSuccess()) {
                     requeue(entry, player.getName());
                     if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
-                    return false;
+                    return ClaimResult.FAILED;
                 }
                 String fmt = Format.money(entry.getMoney());
                 if (!quiet) player.sendMessage(Main.msg("claim_refund").replace("{amount}", fmt));
@@ -176,27 +202,50 @@ public class ClaimBoxService {
                     LogService.log("claim-items",
                             player.getName() + " dismissed corrupt item entry (ID "
                                     + entry.getId() + ")");
-                    return true;
+                    return ClaimResult.GRANTED;
                 }
 
-                var leftover = player.getInventory().addItem(stored);
+                // addItem() MUTATES the passed stack while distributing it, so
+                // capture the requested amount first and trust only the returned
+                // leftover map afterwards.
+                int requested = stored.getAmount();
+                var leftover  = player.getInventory().addItem(stored);
                 if (!leftover.isEmpty()) {
-                    // Inventory full — re-queue so the player can try again later.
-                    requeue(entry, player.getName());
+                    // V6.3.0 dupe fix: addItem() delivers a PARTIAL amount when
+                    // the inventory has some room (topping up existing stacks).
+                    // The old code re-queued the full original stack, so the
+                    // delivered part existed in the player's inventory AND in
+                    // claim storage — item duplication (dashv's report).
+                    // Re-queue ONLY what did not fit.
+                    int leftoverAmount = 0;
+                    for (ItemStack l : leftover.values()) leftoverAmount += l.getAmount();
+                    int delivered = requested - leftoverAmount;
+
+                    ItemStack requeueStack = entry.getItem(); // fresh full clone incl. meta
+                    requeueStack.setAmount(leftoverAmount);
+                    requeue(entry, player.getName(), requeueStack);
+
+                    if (delivered > 0) {
+                        LogService.log("claim-items",
+                                player.getName() + " partially claimed " + delivered
+                                        + "x " + requeueStack.getType().name()
+                                        + " (of " + requested + ", " + leftoverAmount
+                                        + " re-queued) from Claim Box");
+                    }
                     if (!quiet) player.sendMessage(Main.msg("claim_inventory_full"));
-                    return false;
+                    return ClaimResult.INVENTORY_FULL;
                 }
 
                 if (!quiet) player.sendMessage(Main.msg("claim_item")
-                        .replace("{amount}",   String.valueOf(stored.getAmount()))
+                        .replace("{amount}",   String.valueOf(requested))
                         .replace("{material}", stored.getType().name()));
                 LogService.log("claim-items",
-                        player.getName() + " claimed " + stored.getAmount()
+                        player.getName() + " claimed " + requested
                                 + "x " + stored.getType().name() + " from Claim Box");
             }
         }
 
-        return true;
+        return ClaimResult.GRANTED;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -209,9 +258,19 @@ public class ClaimBoxService {
      * player's reward is permanently lost.
      */
     private void requeue(ClaimEntry entry, String playerName) {
+        requeue(entry, playerName,
+                entry.getType() == ClaimType.ITEM ? entry.getItem() : null);
+    }
+
+    /**
+     * As {@link #requeue(ClaimEntry, String)}, with an explicit stack for ITEM
+     * entries.  V6.3.0 dupe fix: after a partial inventory fit, only the
+     * portion that did NOT fit may be re-queued — re-inserting the full
+     * original stack duplicated the delivered part.
+     */
+    private void requeue(ClaimEntry entry, String playerName, ItemStack itemToRequeue) {
         // Clone item if present so the entry being re-inserted owns its own copy.
-        ItemStack itemCopy = (entry.getType() == ClaimType.ITEM && entry.getItem() != null)
-                ? entry.getItem().clone() : null;
+        ItemStack itemCopy = itemToRequeue == null ? null : itemToRequeue.clone();
         ClaimEntry fresh = new ClaimEntry(
                 entry.getPlayer(), entry.getType(), itemCopy, entry.getMoney());
         // Audit fix #10: requeue is reached from main-thread claim paths — run
