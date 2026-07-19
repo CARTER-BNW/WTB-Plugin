@@ -163,7 +163,11 @@ messages:
   usage_buy: "&cUsage: /wtb <item> <quantity> <total_price>. <item> = material or catalog key. Books: /wtb enchanted_book <qty> <price> <enchant> [level]"
   usage_admin: "&cUsage: /wtb admin <cancel|info> <listing_id> or /wtb admin <register|unregister> <key>"
 
-  help_message: |
+  # Renamed from help_message in V6.4.1 ON PURPOSE: servers upgrading have the
+  # old help_message text saved in their on-disk settings.yml, which would win
+  # over these bundled defaults forever.  A new key is absent from old files,
+  # so every server picks up the new help automatically.
+  help_message_player: |
     &e=== WTB Help ===
     &e/wtb &7- Open the marketplace
     &e/wtb &f<item> <qty> <price> &7- Create a buy order (material or catalog key)
@@ -172,8 +176,19 @@ messages:
     &e/wtb fill &7- Sell into every order you can (with confirmation)
     &e/wtb cancel &7- Cancel ALL your open buy orders
     &e/wtb my &7- View your buy orders
-    &e/wtb claim &7- Open your Claim Box
+    &e/wtb claim &7- Open your Claim Box &8(shift-click an item = claim all of that type)
     &e/wtb tx &7- View recent transactions
-    &e/wtb settings &7- Your personal settings (mute popup alerts, ...)
+    &e/wtb settings &7- Show your personal settings
+    &e/wtb settings mute &ffull|partial|all|off &7- Mute the order-filled popup
     &e/wtb help &7- Show this help menu
     &7Only exact-match items can fill orders (no damage, renames, or wrong enchants).
+    &8Made by xJBACx
+
+  # Appended to help_message for players with wtb.admin only.
+  help_message_admin: |
+    &6=== Admin ===
+    &e/wtb admin cancel &f<listing_id> &7- Force-cancel a listing (refunds the buyer)
+    &e/wtb admin info &f<listing_id> &7- Inspect a listing
+    &e/wtb admin register &f<key> &7- Register the held item as a catalog key
+    &e/wtb admin unregister &f<key> &7- Remove a registered catalog key
+    &e/wtbreload &7- Reload WTB settings

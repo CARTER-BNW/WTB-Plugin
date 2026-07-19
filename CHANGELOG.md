@@ -1,5 +1,29 @@
 # WTB Changelog
 
+## v6.4.1 — 2026-07-20
+
+Help polish.
+
+### ✨ Changed
+
+- **`/wtb help` and the main GUI Help button rewritten** (`WTBCommand`,
+  `settings.yml`) — lists every player command including the v6.2+ additions
+  (`/wtb settings`, `/wtb settings mute full|partial|all|off`) and the v6.4.0
+  shift-click type-claim hint. The legacy `/wtb buy` alias still works but is
+  no longer advertised. Admin commands (`/wtb admin ...`, `/wtbreload`) are
+  hidden from regular players and shown as an extra section ONLY to players
+  with `wtb.admin`.
+- **Credit** — help footer and the main GUI Help button now read
+  *Made by xJBACx*.
+
+Drop-in replacement for v6.4.0. The help text key was renamed
+(`help_message` → `help_message_player`) so upgraded servers pick up the new
+text automatically instead of keeping the stale copy saved in their on-disk
+`settings.yml`; servers that customised the old `help_message` should port
+their edits to the new key.
+
+---
+
 ## v6.4.0 — 2026-07-20
 
 Claim Box quality-of-life release — the three improvements requested alongside

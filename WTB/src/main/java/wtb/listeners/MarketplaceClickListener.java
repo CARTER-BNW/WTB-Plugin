@@ -163,7 +163,7 @@ public class MarketplaceClickListener implements Listener {
             case 51 -> Bukkit.getScheduler().runTask(Main.getInstance(),
                     () -> Main.getTransactionsGUI().open(player, 0));
 
-            case 52 -> player.sendMessage(Main.msg("help_message"));
+            case 52 -> WTBCommand.sendHelp(player);
 
             case 53 -> { // Fill All
                 if (!Main.getSettings().getBoolean("settings.listing.fill-all-enabled", true)) return;
