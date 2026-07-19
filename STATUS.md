@@ -7,7 +7,7 @@ Updated: 2026-07-20 (Claude session)
 - dashv's three QoL asks implemented: sort toggle (Newest/Item Type),
   shift-click "claim all of this type", better paging (stay on page, clamp,
   page indicator). Plus deposit-throw hardening and stable DAO ordering.
-- New rerunnable stress suite committed at `claimbox-stress/` — 12 scenarios,
+- New rerunnable stress suite committed at `claimbox-stress/` — 13 scenarios,
   49 checks, conservation invariant everywhere. v6.4.0 run: ALL GREEN.
   Timings: 1000-row TYPE sort render 130 ms; 1000-entry Claim All 3.7 s
   (tick-spread, no freeze).

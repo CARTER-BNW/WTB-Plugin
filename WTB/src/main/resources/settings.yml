@@ -140,6 +140,7 @@ messages:
   claim_item: "&aYou claimed &e{amount}x {material}&a!"
   claim_inventory_full: "&cYour inventory is full - free up space and try again."
   claim_failed_deposit: "&cFailed to deposit money. Contact an admin."
+  claim_failed_retry: "&cSomething went wrong - your claim is safe, please try again."
   claim_item_corrupt: "&cThis item entry is corrupt and has been dismissed."
   claim_all_success: "&aClaimed &e{count}&a item(s) from your Claim Box!"
   claim_all_partial: "&aClaimed &e{count}&a item(s). &c{failed} could not be claimed (inventory full?)."

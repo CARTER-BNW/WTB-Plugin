@@ -8,8 +8,11 @@ import net.milkbowl.vault.economy.EconomyResponse;
 import wtb.Main;
 import wtb.utils.Format;
 import wtb.database.ClaimBoxDAO;
+import wtb.database.DatabaseManager;
 import wtb.models.ClaimEntry;
 import wtb.models.ClaimType;
+
+import java.sql.Connection;
 
 import java.util.List;
 import java.util.UUID;
@@ -159,93 +162,142 @@ public class ClaimBoxService {
         // inventory that gets thrown away on disconnect.
         if (!player.isOnline()) return ClaimResult.FAILED;
 
-        // Bug #2 fix: atomically claim ownership via a synchronous DELETE.
-        // executeUpdate() returns the number of rows affected; 0 means the entry
-        // was already deleted by a previous claim() call — abort with no effect.
-        if (!dao.deleteIfExists(entry.getId())) {
-            return ClaimResult.ALREADY_CLAIMED;
-        }
+        // V6.4.2: the whole claim is ONE transaction on ONE connection.  The old
+        // flow committed the DELETE immediately and re-queued failed/partial
+        // claims with an ASYNC insert — an insert failure (SQLITE_BUSY under
+        // Claim-All churn), a crash, or a shutdown inside that window destroyed
+        // the entry with only a console warning (~79k items were lost on a live
+        // server this way).  Now the DELETE (still Bug #2's atomic ownership
+        // guard — exactly one concurrent claimer sees rowcount 1) and any
+        // re-queue INSERT commit or roll back TOGETHER: on any DB error the row
+        // survives untouched, the grant is undone, and the player just retries.
+        ClaimResult result;
+        ClaimEntry  requeueRow = null;   // re-inserted in the SAME transaction
+        Runnable    undoGrant  = null;   // reverses the grant if the tx fails
+        String      postMsg    = null;   // chat line — sent only after commit
+        String      postLogTag = null, postLogLine = null; // file log, after commit
 
-        switch (entry.getType()) {
+        Connection conn = null;
+        try {
+            conn = DatabaseManager.get().getConnection();
+            conn.setAutoCommit(false);
 
-            case MONEY -> {
-                EconomyResponse resp = deposit(player, entry.getMoney());
-                if (resp == null || !resp.transactionSuccess()) {
-                    requeue(entry, player.getName());
-                    if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
-                    return ClaimResult.FAILED;
-                }
-                String fmt = Format.money(entry.getMoney());
-                if (!quiet) player.sendMessage(Main.msg("claim_money").replace("{amount}", fmt));
-                LogService.log("claim-money",
-                        player.getName() + " claimed " + fmt + " from Claim Box");
+            if (!dao.deleteInTx(conn, entry.getId())) {
+                conn.rollback();
+                return ClaimResult.ALREADY_CLAIMED;
             }
 
-            case REFUND -> {
-                EconomyResponse resp = deposit(player, entry.getMoney());
-                if (resp == null || !resp.transactionSuccess()) {
-                    requeue(entry, player.getName());
-                    if (!quiet) player.sendMessage(Main.msg("claim_failed_deposit"));
-                    return ClaimResult.FAILED;
+            switch (entry.getType()) {
+
+                case MONEY, REFUND -> {
+                    EconomyResponse resp = deposit(player, entry.getMoney());
+                    if (resp == null || !resp.transactionSuccess()) {
+                        requeueRow = new ClaimEntry(
+                                entry.getPlayer(), entry.getType(), null, entry.getMoney());
+                        postMsg = quiet ? null : Main.msg("claim_failed_deposit");
+                        result  = ClaimResult.FAILED;
+                    } else {
+                        double amount = entry.getMoney();
+                        undoGrant = () -> Main.getEconomy().withdrawPlayer(player, amount);
+                        String  fmt    = Format.money(amount);
+                        boolean refund = entry.getType() == ClaimType.REFUND;
+                        postMsg = quiet ? null : Main
+                                .msg(refund ? "claim_refund" : "claim_money")
+                                .replace("{amount}", fmt);
+                        postLogTag  = refund ? "claim-refund" : "claim-money";
+                        postLogLine = player.getName()
+                                + (refund ? " claimed refund of " : " claimed ")
+                                + fmt + " from Claim Box";
+                        result = ClaimResult.GRANTED;
+                    }
                 }
-                String fmt = Format.money(entry.getMoney());
-                if (!quiet) player.sendMessage(Main.msg("claim_refund").replace("{amount}", fmt));
-                LogService.log("claim-refund",
-                        player.getName() + " claimed refund of " + fmt + " from Claim Box");
-            }
 
-            case ITEM -> {
-                ItemStack stored = entry.getItem();
-                if (stored == null) {
-                    // Corrupt entry: row was already deleted, just discard and log.
-                    if (!quiet) player.sendMessage(Main.msg("claim_item_corrupt"));
-                    LogService.log("claim-items",
-                            player.getName() + " dismissed corrupt item entry (ID "
-                                    + entry.getId() + ")");
-                    return ClaimResult.GRANTED;
-                }
+                case ITEM -> {
+                    ItemStack stored = entry.getItem();
+                    if (stored == null) {
+                        // Corrupt entry: discard the row and tell the player.
+                        postMsg = quiet ? null : Main.msg("claim_item_corrupt");
+                        postLogTag  = "claim-items";
+                        postLogLine = player.getName()
+                                + " dismissed corrupt item entry (ID " + entry.getId() + ")";
+                        result = ClaimResult.GRANTED;
+                    } else {
+                        // addItem() MUTATES the passed stack while distributing it,
+                        // so capture the requested amount first and trust only the
+                        // returned leftover map afterwards.
+                        int requested = stored.getAmount();
+                        var leftover  = player.getInventory().addItem(stored);
+                        if (!leftover.isEmpty()) {
+                            // V6.3.0 dupe fix: addItem() delivers a PARTIAL amount
+                            // when the inventory has some room (topping up existing
+                            // stacks) — re-queue ONLY what did not fit.
+                            int leftoverAmount = 0;
+                            for (ItemStack l : leftover.values()) leftoverAmount += l.getAmount();
+                            int delivered = requested - leftoverAmount;
 
-                // addItem() MUTATES the passed stack while distributing it, so
-                // capture the requested amount first and trust only the returned
-                // leftover map afterwards.
-                int requested = stored.getAmount();
-                var leftover  = player.getInventory().addItem(stored);
-                if (!leftover.isEmpty()) {
-                    // V6.3.0 dupe fix: addItem() delivers a PARTIAL amount when
-                    // the inventory has some room (topping up existing stacks).
-                    // The old code re-queued the full original stack, so the
-                    // delivered part existed in the player's inventory AND in
-                    // claim storage — item duplication (dashv's report).
-                    // Re-queue ONLY what did not fit.
-                    int leftoverAmount = 0;
-                    for (ItemStack l : leftover.values()) leftoverAmount += l.getAmount();
-                    int delivered = requested - leftoverAmount;
+                            ItemStack requeueStack = entry.getItem(); // fresh full clone incl. meta
+                            requeueStack.setAmount(leftoverAmount);
+                            requeueRow = new ClaimEntry(
+                                    entry.getPlayer(), ClaimType.ITEM, requeueStack, 0);
 
-                    ItemStack requeueStack = entry.getItem(); // fresh full clone incl. meta
-                    requeueStack.setAmount(leftoverAmount);
-                    requeue(entry, player.getName(), requeueStack);
-
-                    if (delivered > 0) {
-                        LogService.log("claim-items",
-                                player.getName() + " partially claimed " + delivered
+                            if (delivered > 0) {
+                                ItemStack deliveredStack = entry.getItem();
+                                deliveredStack.setAmount(delivered);
+                                undoGrant = () -> player.getInventory().removeItem(deliveredStack);
+                                postLogTag  = "claim-items";
+                                postLogLine = player.getName() + " partially claimed " + delivered
                                         + "x " + requeueStack.getType().name()
                                         + " (of " + requested + ", " + leftoverAmount
-                                        + " re-queued) from Claim Box");
+                                        + " re-queued) from Claim Box";
+                            }
+                            postMsg = quiet ? null : Main.msg("claim_inventory_full");
+                            result  = ClaimResult.INVENTORY_FULL;
+                        } else {
+                            ItemStack deliveredStack = entry.getItem();
+                            undoGrant = () -> player.getInventory().removeItem(deliveredStack);
+                            postMsg = quiet ? null : Main.msg("claim_item")
+                                    .replace("{amount}",   String.valueOf(requested))
+                                    .replace("{material}", deliveredStack.getType().name());
+                            postLogTag  = "claim-items";
+                            postLogLine = player.getName() + " claimed " + requested
+                                    + "x " + deliveredStack.getType().name() + " from Claim Box";
+                            result = ClaimResult.GRANTED;
+                        }
                     }
-                    if (!quiet) player.sendMessage(Main.msg("claim_inventory_full"));
-                    return ClaimResult.INVENTORY_FULL;
                 }
 
-                if (!quiet) player.sendMessage(Main.msg("claim_item")
-                        .replace("{amount}",   String.valueOf(requested))
-                        .replace("{material}", stored.getType().name()));
-                LogService.log("claim-items",
-                        player.getName() + " claimed " + requested
-                                + "x " + stored.getType().name() + " from Claim Box");
+                default -> throw new IllegalStateException(
+                        "Unknown claim type " + entry.getType());
+            }
+
+            if (requeueRow != null) dao.addOrThrow(conn, requeueRow);
+            conn.commit();
+
+        } catch (Exception e) {
+            try { if (conn != null) conn.rollback(); } catch (Exception ignore) {}
+            if (undoGrant != null) {
+                try { undoGrant.run(); } catch (Exception undoEx) {
+                    LOG.severe("[WTB] CRITICAL: failed to undo claim grant for entry "
+                            + entry.getId() + " after tx failure — possible duplicate: " + undoEx);
+                }
+            }
+            LOG.severe("[WTB] Claim transaction failed for entry " + entry.getId()
+                    + " (" + player.getName() + ") — entry kept, nothing granted: " + e);
+            LogService.log("claim-items", "TX-FAIL: claim of entry " + entry.getId()
+                    + " by " + player.getName() + " rolled back — entry kept");
+            if (!quiet) player.sendMessage(Main.msg("claim_failed_retry"));
+            return ClaimResult.FAILED;
+        } finally {
+            if (conn != null) {
+                try { conn.setAutoCommit(true); } catch (Exception ignore) {}
+                try { conn.close(); } catch (Exception ignore) {}
             }
         }
 
-        return ClaimResult.GRANTED;
+        // Committed — now it is safe to tell the player and write the file log.
+        if (postMsg != null) player.sendMessage(postMsg);
+        if (postLogTag != null) LogService.log(postLogTag, postLogLine);
+        return result;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -266,37 +318,7 @@ public class ClaimBoxService {
         }
     }
 
-    /**
-     * Re-inserts a claim entry after a failed reward attempt (inventory full,
-     * economy error).  Uses the 4-argument constructor so the DB assigns a fresh ID.
-     *
-     * <p>If this re-insert also fails we log a SEVERE warning, since it means the
-     * player's reward is permanently lost.
-     */
-    private void requeue(ClaimEntry entry, String playerName) {
-        requeue(entry, playerName,
-                entry.getType() == ClaimType.ITEM ? entry.getItem() : null);
-    }
-
-    /**
-     * As {@link #requeue(ClaimEntry, String)}, with an explicit stack for ITEM
-     * entries.  V6.3.0 dupe fix: after a partial inventory fit, only the
-     * portion that did NOT fit may be re-queued — re-inserting the full
-     * original stack duplicated the delivered part.
-     */
-    private void requeue(ClaimEntry entry, String playerName, ItemStack itemToRequeue) {
-        // Clone item if present so the entry being re-inserted owns its own copy.
-        ItemStack itemCopy = itemToRequeue == null ? null : itemToRequeue.clone();
-        ClaimEntry fresh = new ClaimEntry(
-                entry.getPlayer(), entry.getType(), itemCopy, entry.getMoney());
-        // Audit fix #10: requeue is reached from main-thread claim paths — run
-        // the INSERT on the DbExecutor (drained at shutdown) instead of doing
-        // synchronous JDBC on the main thread.
-        wtb.database.DbExecutor.submit(() -> {
-            if (!dao.add(fresh)) {
-                LOG.severe("[WTB] CRITICAL: Failed to re-queue claim entry for " + playerName
-                        + " (type=" + entry.getType() + "). Reward may be permanently lost!");
-            }
-        });
-    }
+    // V6.4.2: the old async requeue helpers are gone — re-queueing now happens
+    // INSIDE the claim transaction (see claimDetailed), so a failed insert can
+    // no longer orphan a deleted row.
 }
